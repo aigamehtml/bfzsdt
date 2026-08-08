@@ -1,0 +1,23 @@
+# 定投导航仪 - Cloudflare Workers 配置
+# 一体化部署：Worker（后端）+ 静态前端（public/index.html）同域发布
+# 部署：`wrangler deploy`（会自动上传 public/ 下的前端）
+# 访问：https://dingtou-worker.<你的子域>.workers.dev
+
+name = "dingtou-worker"
+main = "worker.js"
+compatibility_date = "2026-08-07"
+
+# 关闭版本预览地址（<version>-dingtou-worker.*.workers.dev），减少对外入口
+preview_urls = false
+
+[[kv_namespaces]]
+binding = "STORE"
+id = "f88edeb10743499b88324298364e6db6"
+
+# 前端静态资源：与 Worker 同域部署，同源访问无需 CORS
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+

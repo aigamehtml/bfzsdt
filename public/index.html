@@ -1,0 +1,2479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!--
+  ============================================================
+  定投导航仪 · 移动端重构版 (完整修改版)
+  ============================================================
+
+  【本次修改内容 - 参考副本文件】
+  1. 左侧竖条改用 border-left 方案 (而非 ::before 伪元素)
+     - 竖条自动跟随卡片圆角，无需 overflow:hidden 裁切
+     - 代码更简洁，视觉效果更自然
+
+  2. 基金名称颜色与左侧竖条保持一致
+     - 添加 .text-orange 样式
+
+  3. 备注添加背景色
+     - .fund-remark 增加 background: #fdf4ff; border-radius: 10px;
+
+  【已包含的新功能 (来自副本文件)】
+  - 止盈目标提醒悬浮窗 (stop-banner)
+  - 基金卡高亮动画 (flash)
+  - 底部抽屉式弹窗 (modal-overlay + modal-sheet)
+  - 账户卡片渐变设计
+  - 详情页副标题显示基金代码
+  ============================================================
+-->
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <title>定投导航仪</title>
+  <style>
+    /* === Design Tokens === */
+    :root {
+      --bg: #f2f3f7;
+      --card: #ffffff;
+      --text: #1a1a2e;
+      --text-secondary: #6b7280;
+      --text-tertiary: #9ca3af;
+      --primary: #4f46e5;
+      --primary-light: #e0e7ff;
+      --primary-dark: #4338ca;
+      --danger: #ef4444;
+      --danger-light: #fef2f2;
+      --success: #10b981;
+      --success-light: #d1fae5;
+      --warning: #f59e0b;
+      --warning-light: #fef3c7;
+      --border: #e5e7eb;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+      --radius-sm: 12px;
+      --radius: 16px;
+      --radius-lg: 20px;
+      --radius-xl: 24px;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --header-height: 56px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    input {
+      font: inherit;
+      border: none;
+      outline: none;
+      background: none;
+    }
+    button {
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    input {
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    /* App Shell */
+    .app-shell {
+      max-width: 480px;
+      margin: 0 auto;
+      min-height: 100dvh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Header */
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(242, 243, 247, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: calc(12px + var(--safe-top)) 16px 12px;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s;
+    }
+    .app-header.scrolled {
+      border-bottom-color: var(--border);
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .header-title {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: var(--card);
+      box-shadow: var(--shadow-sm);
+      font-size: 18px;
+      transition: transform 0.15s, background 0.2s;
+    }
+    .icon-btn:active {
+      transform: scale(0.92);
+      background: var(--primary-light);
+    }
+
+    /* Content */
+    .content {
+      padding: 0 16px calc(24px + var(--safe-bottom));
+    }
+
+    /* Account Card (渐变设计) */
+    .account-section {
+      margin-top: 8px;
+      margin-bottom: 20px;
+    }
+
+    .account-card {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      border-radius: var(--radius-xl);
+      padding: 20px;
+      color: white;
+      box-shadow: 0 8px 24px rgba(79, 70, 229, 0.3);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .account-card::before {
+      content: "";
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 200px;
+      height: 200px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 50%;
+    }
+
+    .account-card::after {
+      content: "";
+      position: absolute;
+      bottom: -30%;
+      left: -10%;
+      width: 150px;
+      height: 150px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 50%;
+    }
+
+    .account-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: relative;
+      z-index: 1;
+    }
+
+    .account-info {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .account-avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      font-weight: 800;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      flex-shrink: 0;
+    }
+
+    .account-name {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .account-meta {
+      font-size: 13px;
+      opacity: 0.85;
+      margin-top: 2px;
+    }
+
+    /* Account Actions Row */
+    .account-actions-row {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .account-action-btn {
+      flex: 1;
+      height: 42px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .account-action-btn:active {
+      background: rgba(255, 255, 255, 0.25);
+      transform: scale(0.98);
+    }
+
+    /* Section Title */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      margin-top: 24px;
+    }
+
+    .section-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .section-count {
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    /* Add Fund */
+    .add-fund-card {
+      background: var(--card);
+      border-radius: var(--radius-xl);
+      padding: 16px;
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .fund-input {
+      flex: 1;
+      height: 48px;
+      background: var(--bg);
+      border-radius: 14px;
+      padding: 0 16px;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 1px;
+      transition: all 0.2s;
+    }
+    .fund-input::placeholder {
+      color: var(--text-tertiary);
+      font-family: inherit;
+      letter-spacing: 0;
+      font-weight: 500;
+    }
+    .fund-input:focus {
+      background: var(--primary-light);
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+    }
+
+    .add-btn {
+      height: 48px;
+      padding: 0 20px;
+      border-radius: 14px;
+      background: var(--primary);
+      color: white;
+      font-size: 14px;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .add-btn:active {
+      transform: scale(0.96);
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.2);
+    }
+
+    /* ============================================================
+       基金卡片 (Fund Card)
+       参考副本文件：使用 border-left 而非 ::before 伪元素
+       竖条自动跟随卡片圆角，无需 overflow:hidden 裁切
+       ============================================================ */
+    .fund-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .fund-card {
+      display: block;
+      background: var(--card);
+      border-radius: var(--radius-xl);
+      padding: 18px 18px 18px 22px;
+      /* 左侧预留空间给 border-left */
+      border-left: 4px solid transparent;
+      /* 基础边框透明，由 .level-* 控制颜色 */
+      box-shadow: var(--shadow);
+      transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+      cursor: pointer;
+      position: relative;
+    }
+    .fund-card:active {
+      transform: scale(0.98);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* 竖条颜色 (由 JS 动态添加 .level-* 类) */
+    .fund-card.level-green {
+      border-left-color: var(--success);
+    }
+    .fund-card.level-orange {
+      border-left-color: var(--warning);
+    }
+    .fund-card.level-red {
+      border-left-color: var(--danger);
+    }
+    .fund-card.level-gray {
+      border-left-color: var(--text-tertiary);
+    }
+
+    .fund-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    /* 基金名称颜色与竖条一致 (由 .text-* 控制) */
+    .fund-name {
+      font-size: 17px;
+      font-weight: 800;
+      line-height: 1.3;
+      letter-spacing: -0.3px;
+    }
+    /* 颜色类 (与竖条颜色匹配) */
+    .text-green {
+      color: var(--success);
+    }
+    .text-orange {
+      color: var(--warning);
+    }
+    .text-red {
+      color: var(--danger);
+    }
+
+    .fund-code {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      font-family: ui-monospace, monospace;
+      margin-top: 4px;
+      display: block;
+    }
+
+    .delete-btn {
+      padding: 6px 12px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--danger);
+      background: var(--danger-light);
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .delete-btn:active {
+      background: var(--danger);
+      color: white;
+    }
+
+    .fund-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .fund-price {
+      font-size: 20px;
+      font-weight: 800;
+      font-family: ui-monospace, monospace;
+    }
+
+    .fund-target {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--primary);
+      text-align: center;
+    }
+
+    .fund-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .tag-green {
+      background: var(--success-light);
+      color: #065f46;
+    }
+    .tag-orange {
+      background: var(--warning-light);
+      color: #92400e;
+    }
+    .tag-red {
+      background: var(--danger-light);
+      color: #991b1b;
+    }
+    .tag-gray {
+      background: #f3f4f6;
+      color: var(--text-secondary);
+    }
+
+    /* ============================================================
+       备注样式 (添加背景色和圆角，与副本文件一致)
+       ============================================================ */
+    .fund-remark {
+      margin-top: 10px;
+      padding: 8px 10px;
+      background: #fdf4ff;
+      border-radius: 10px;
+      font-size: 12px;
+      color: #be185d;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-tertiary);
+    }
+    .empty-icon {
+      font-size: 56px;
+      margin-bottom: 16px;
+      opacity: 0.6;
+    }
+    .empty-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .empty-desc {
+      font-size: 13px;
+    }
+
+    /* Detail Page (全屏滑入) */
+    .page-detail {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      z-index: 50;
+      overflow-y: auto;
+      animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+      }
+      to {
+        transform: translateX(0);
+      }
+    }
+
+    .detail-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(242, 243, 247, 0.9);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: calc(8px + var(--safe-top)) 16px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .detail-back {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow-sm);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .detail-back:active {
+      transform: scale(0.92);
+    }
+
+    .detail-title-wrap {
+      flex: 1;
+      min-width: 0;
+    }
+    .detail-title {
+      font-size: 17px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .detail-subtitle {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      font-family: ui-monospace, monospace;
+    }
+
+    .detail-next {
+      padding: 8px 14px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow-sm);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--primary);
+      transition: all 0.2s;
+    }
+    .detail-next:active {
+      transform: scale(0.96);
+    }
+
+    .detail-content {
+      padding: 16px;
+      padding-bottom: calc(32px + var(--safe-bottom));
+    }
+
+    /* Detail Card */
+    .detail-card {
+      background: var(--card);
+      border-radius: var(--radius-xl);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+
+    .detail-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+
+    .detail-fund-name {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+    }
+    .detail-fund-code {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      font-family: ui-monospace, monospace;
+      margin-top: 4px;
+    }
+
+    /* Metrics */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .metric-box {
+      background: var(--bg);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+    }
+
+    .metric-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-size: 22px;
+      font-weight: 800;
+      font-family: ui-monospace, monospace;
+      letter-spacing: -0.5px;
+    }
+
+    .metric-date {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+    }
+
+    /* Signal Box */
+    .signal-box {
+      text-align: center;
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      letter-spacing: 0.5px;
+    }
+
+    .signal-green {
+      color: #065f46;
+      background: var(--success-light);
+    }
+    .signal-orange {
+      color: #92400e;
+      background: var(--warning-light);
+    }
+    .signal-red {
+      color: #991b1b;
+      background: var(--danger-light);
+    }
+    .signal-gray {
+      color: var(--text-secondary);
+      background: #f3f4f6;
+    }
+
+    /* Progress */
+    .progress-wrap {
+      margin-bottom: 16px;
+    }
+    .progress-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 10px;
+    }
+    .progress-dots {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 4px;
+    }
+    .dot {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--border);
+      transition: all 0.3s;
+    }
+    .dot.active {
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+    }
+
+    /* Profit Card */
+    .profit-section {
+      background: var(--bg);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .profit-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .profit-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .stopprofit-btn {
+      padding: 6px 12px;
+      border-radius: 10px;
+      background: var(--warning-light);
+      color: #92400e;
+      font-size: 12px;
+      font-weight: 800;
+      transition: all 0.2s;
+    }
+    .stopprofit-btn:active {
+      transform: scale(0.96);
+    }
+
+    .profit-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .profit-item-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .profit-item-value {
+      font-size: 16px;
+      font-weight: 800;
+      font-family: ui-monospace, monospace;
+    }
+
+    .profit-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 12px 0;
+    }
+
+    .profit-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+    }
+    .profit-line-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+    .profit-line-value {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    /* Action Grid */
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .action-btn {
+      height: 48px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .action-btn:active {
+      transform: scale(0.96);
+    }
+    .action-btn-primary {
+      background: var(--primary);
+      color: white;
+      border: none;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
+    }
+    .action-btn-primary:active {
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.15);
+    }
+    .action-btn-full {
+      grid-column: 1 / -1;
+    }
+
+    /* Records */
+    .records-section {
+      margin-top: 20px;
+    }
+    .records-title {
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 12px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .record-card {
+      background: var(--bg);
+      border-radius: var(--radius-lg);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .record-index {
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 2px;
+    }
+    .record-date {
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+
+    .record-values {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .record-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-family: ui-monospace, monospace;
+    }
+
+    .record-delete {
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--danger);
+      background: transparent;
+      transition: all 0.2s;
+    }
+    .record-delete:active {
+      background: var(--danger-light);
+    }
+
+    .first-change {
+      margin-top: 16px;
+      padding: 14px;
+      text-align: center;
+      border-radius: var(--radius-lg);
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .first-up {
+      color: #991b1b;
+      background: var(--danger-light);
+    }
+    .first-down {
+      color: #065f46;
+      background: var(--success-light);
+    }
+
+    /* ============================================================
+       底部抽屉式弹窗 (Bottom Sheet Modal)
+       ============================================================ */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      z-index: 100;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s, visibility 0.3s;
+    }
+    .modal-overlay.show {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .modal-sheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--card);
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      padding: 8px 20px calc(24px + var(--safe-bottom));
+      z-index: 101;
+      transform: translateY(100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      max-height: 92vh;
+      overflow-y: auto;
+      box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.15);
+    }
+    .modal-overlay.show+.modal-sheet,
+    .modal-sheet.show {
+      transform: translateY(0);
+    }
+
+    .modal-handle {
+      width: 36px;
+      height: 4px;
+      background: var(--border);
+      border-radius: 999px;
+      margin: 0 auto 20px;
+    }
+
+    .modal-title {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 4px;
+      letter-spacing: -0.3px;
+    }
+
+    .modal-subtitle {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 20px;
+    }
+
+    .modal-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding: 12px 16px;
+      background: var(--bg);
+      border-radius: var(--radius-lg);
+    }
+
+    .modal-badge-code {
+      font-family: ui-monospace, monospace;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .modal-badge-tag {
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+
+    /* Form */
+    .form-group {
+      margin-bottom: 18px;
+    }
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* 金额输入框旁的「建议 N 元」提示 */
+    .form-hint {
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin-left: 4px;
+    }
+    .form-input {
+      width: 100%;
+      height: 52px;
+      background: var(--bg);
+      border-radius: 14px;
+      padding: 0 16px;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      border: 2px solid transparent;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .form-input:focus {
+      border-color: var(--primary);
+      background: white;
+      box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+    }
+    .form-input::placeholder {
+      color: var(--text-tertiary);
+      font-weight: 500;
+    }
+    .form-input.mono {
+      font-family: ui-monospace, monospace;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .modal-btn {
+      flex: 1;
+      height: 52px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 700;
+      transition: all 0.2s;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .modal-btn:active {
+      transform: scale(0.98);
+    }
+    .modal-btn-primary {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
+    }
+    .modal-btn-danger {
+      background: var(--danger-light);
+      color: var(--danger);
+    }
+    .modal-btn-primary:active {
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.15);
+    }
+
+    /* Account List Modal */
+    .account-list-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      margin-bottom: 10px;
+      background: var(--bg);
+      border: 2px solid transparent;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+    .account-list-item:active {
+      transform: scale(0.98);
+    }
+    .account-list-item.active {
+      background: var(--primary-light);
+      border-color: var(--primary);
+    }
+
+    .account-list-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      font-weight: 800;
+      color: white;
+      flex-shrink: 0;
+    }
+
+    .account-list-info {
+      flex: 1;
+    }
+    .account-list-name {
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .account-list-count {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .account-list-delete {
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--danger);
+      background: transparent;
+      transition: all 0.2s;
+    }
+    .account-list-delete:active {
+      background: var(--danger-light);
+    }
+
+    /* ============================================================
+       止盈目标提醒悬浮窗 (Stop Banner)
+       ============================================================ */
+    .stop-banner {
+      position: fixed;
+      top: calc(12px + var(--safe-top));
+      left: 50%;
+      transform: translateX(-50%) translateY(-150%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: min(92vw, 430px);
+      padding: 10px 12px 10px 14px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 10px 26px rgba(220, 38, 38, 0.35);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.3s cubic-bezier(0.34, 1.35, 0.64, 1), opacity 0.3s ease;
+      z-index: 60;
+      white-space: nowrap;
+    }
+    .stop-banner.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+    .stop-banner-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #fff;
+      flex: none;
+      animation: stopDotPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes stopDotPulse {
+      0%,
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+      50% {
+        transform: scale(1.55);
+        opacity: 0.5;
+      }
+    }
+    .stop-banner-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .stop-banner-view {
+      flex: none;
+      padding: 3px 11px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .stop-banner-view:active {
+      transform: scale(0.94);
+    }
+    .stop-banner-close {
+      flex: none;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 17px;
+      line-height: 1;
+    }
+    .stop-banner-close:active {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    /* 基金卡高亮动画 (点击"查看"时闪烁) */
+    .fund-card.flash {
+      animation: cardFlash 1.6s ease;
+    }
+    @keyframes cardFlash {
+      0%,
+      100% {
+        outline: 0 solid rgba(220, 38, 38, 0);
+      }
+      25%,
+      65% {
+        outline: 3px solid rgba(220, 38, 38, 0.5);
+      }
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(32px + var(--safe-bottom));
+      transform: translateX(-50%) translateY(20px);
+      max-width: min(90vw, 380px);
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: rgba(17, 24, 39, 0.92);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s, transform 0.3s;
+      z-index: 200;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Utility */
+    .hidden {
+      display: none !important;
+    }
+    .text-primary {
+      color: var(--primary);
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    @media (max-width: 380px) {
+      .fund-body {
+        grid-template-columns: 1fr auto;
+      }
+      .fund-target {
+        display: none;
+      }
+      .metric-value {
+        font-size: 18px;
+      }
+      .profit-item-value {
+        font-size: 14px;
+      }
+      /* 头部有 4 个图标按钮，窄屏收一下尺寸避免挤压标题 */
+      .header-actions {
+        gap: 6px;
+      }
+      .icon-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+      }
+      .header-title {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <!-- Home Page -->
+    <section id="pageHome" class="page-home">
+      <header class="app-header" id="homeHeader">
+        <div class="header-inner">
+          <div>
+            <h1 class="header-title">定投导航仪</h1>
+          </div>
+          <div class="header-actions">
+            <button class="icon-btn" id="btnImport" title="导入">📥</button>
+            <button class="icon-btn" id="btnExport" title="导出">📤</button>
+            <button class="icon-btn" id="btnRefreshAll" title="刷新">🔄</button>
+            <button class="icon-btn" id="btnSecurity" title="账号安全">🔒</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="content">
+        <!-- Account Card -->
+        <section class="account-section">
+          <div class="account-card">
+            <div class="account-top">
+              <div class="account-info">
+                <div class="account-avatar" id="accountAvatar"><span>主</span></div>
+                <div>
+                  <div class="account-name" id="currentAccountName">主力</div>
+                  <div class="account-meta" id="accountFundSummary">当前账户 0 只基金</div>
+                </div>
+              </div>
+            </div>
+            <div class="account-actions-row">
+<button class="account-action-btn" id="btnAddAccount">➕ 新建账户</button>
+              <button class="account-action-btn" id="btnSwitchAccount">🔁 切换账户</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section Title -->
+        <div class="section-header">
+          <h2 class="section-title">我的定投基金</h2>
+          <span class="section-count" id="fundCountBadge">0 只</span>
+        </div>
+
+        <!-- Add Fund -->
+        <div class="add-fund-card">
+          <input class="fund-input mono" id="newFundCode" inputmode="numeric" maxlength="6" placeholder="输入 6 位基金代码">
+          <button class="add-btn" id="btnAddFund">添加</button>
+        </div>
+
+        <!-- Fund List -->
+        <section id="fundList" class="fund-list"></section>
+        <section id="emptyState" class="empty-state hidden">
+          <div class="empty-icon">📊</div>
+          <div class="empty-title">暂无基金</div>
+          <div class="empty-desc">输入基金代码，开始追踪定投</div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Detail Page -->
+    <section id="pageDetail" class="page-detail">
+      <header class="detail-header">
+        <button class="detail-back" id="btnBack">←</button>
+        <div class="detail-title-wrap">
+          <div class="detail-title" id="detailTitle">基金详情</div>
+          <div class="detail-subtitle mono" id="detailSubtitle"></div>
+        </div>
+        <button class="detail-next" id="btnNextFund">下一个 →</button>
+      </header>
+      <section class="detail-content" id="detailContent"></section>
+    </section>
+  </main>
+
+  <input type="file" id="importInput" class="hidden" accept=".json,application/json">
+
+  <!-- Modals -->
+  <div class="modal-overlay" id="accountModalOverlay"></div>
+  <div class="modal-sheet" id="accountModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">选择账户</h2>
+    <p class="modal-subtitle">切换不同投资目标</p>
+    <div id="accountList"></div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCloseAccountModal">关闭</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="addAccountModalOverlay"></div>
+  <div class="modal-sheet" id="addAccountModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">新建账户</h2>
+    <p class="modal-subtitle">为不同投资目标单独建一个账户</p>
+    <div class="form-group">
+      <label class="form-label" for="newAccountName">账户名称</label>
+      <input class="form-input" id="newAccountName" placeholder="如：主力、备用">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelAddAccount">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmAddAccount">确认</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="buyModalOverlay"></div>
+  <div class="modal-sheet" id="buyModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title" id="buyModalTitle">记录成交</h2>
+    <p class="modal-subtitle" id="buyModalSubtitle"></p>
+    <div class="modal-badge-row">
+      <strong class="modal-badge-code mono" id="buyModalFundCode"></strong>
+      <span class="modal-badge-tag" id="buyRecordBadge"></span>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="buyTime">买入时间</label>
+      <input class="form-input" type="date" id="buyTime">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="buyPrice">真实成交净值</label>
+      <input class="form-input mono" type="number" step="0.0001" id="buyPrice" placeholder="0.0000">
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label class="form-label" for="buyAmount">金额 (元) <span class="form-hint" id="buyAmountHint"></span></label>
+        <input class="form-input" type="number" id="buyAmount" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="buyShares">份额</label>
+        <input class="form-input mono" type="number" step="0.01" id="buyShares" placeholder="0.00">
+      </div>
+    </div>
+    <div class="form-group" id="stopProfitRow">
+      <label class="form-label" for="stopProfitTarget">止盈目标 (%)</label>
+      <input class="form-input" type="number" step="1" min="5" max="100" id="stopProfitTarget" placeholder="20">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelBuy">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmBuy">确认记录</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="remarkModalOverlay"></div>
+  <div class="modal-sheet" id="remarkModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">基金备注</h2>
+    <p class="modal-subtitle" id="remarkModalSubtitle"></p>
+    <div class="form-group">
+      <label class="form-label" for="remarkInput">备注内容</label>
+      <input class="form-input" id="remarkInput" maxlength="200" placeholder="输入备注信息">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelRemark">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmRemark">保存</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="stopProfitModalOverlay"></div>
+  <div class="modal-sheet" id="stopProfitModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">修改止盈目标</h2>
+    <p class="modal-subtitle" id="stopProfitModalSubtitle"></p>
+    <div class="form-group">
+      <label class="form-label" for="newStopProfit">止盈目标 (%)</label>
+      <input class="form-input" type="number" step="1" min="5" max="100" id="newStopProfit" placeholder="20">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelStopProfit">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmStopProfit">保存</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="reduceModalOverlay"></div>
+  <div class="modal-sheet" id="reduceModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">记录减仓</h2>
+    <p class="modal-subtitle" id="reduceModalSubtitle"></p>
+    <div class="modal-badge-row">
+      <strong class="modal-badge-code mono" id="reduceModalFundCode"></strong>
+      <span class="modal-badge-tag" id="reduceHeldBadge"></span>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="reduceTime">减仓时间</label>
+      <input class="form-input" type="date" id="reduceTime">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="reducePrice">减仓净值</label>
+      <input class="form-input mono" type="number" step="0.0001" id="reducePrice" placeholder="0.0000">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="reduceShares">减仓份额</label>
+      <input class="form-input mono" type="number" step="0.01" id="reduceShares" placeholder="0.00">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelReduce">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmReduce">确认减仓</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="securityModalOverlay"></div>
+  <div class="modal-sheet" id="securityModal">
+    <div class="modal-handle"></div>
+    <h2 class="modal-title">账号安全</h2>
+    <p class="modal-subtitle">修改访问密码或退出登录</p>
+    <div class="form-group">
+      <label class="form-label" for="oldPwd">原密码</label>
+      <input class="form-input" type="password" id="oldPwd" autocomplete="current-password" placeholder="输入当前密码">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="newPwd">新密码</label>
+      <input class="form-input" type="password" id="newPwd" autocomplete="new-password" placeholder="至少 6 位">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="newPwd2">确认新密码</label>
+      <input class="form-input" type="password" id="newPwd2" autocomplete="new-password" placeholder="再输一次新密码">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="btnCancelSecurity">取消</button>
+      <button class="modal-btn modal-btn-primary" id="btnConfirmChangePwd">修改密码</button>
+    </div>
+    <div class="modal-actions" style="margin-top:10px;">
+      <button class="modal-btn modal-btn-danger" id="btnLogout">退出登录</button>
+    </div>
+  </div>
+
+  <!-- Stop Banner -->
+  <div class="stop-banner" id="stopBanner" role="status">
+    <span class="stop-banner-dot"></span>
+    <span class="stop-banner-text" id="stopBannerText"></span>
+    <button type="button" class="stop-banner-view" id="stopBannerView">查看</button>
+    <button type="button" class="stop-banner-close" id="stopBannerClose" aria-label="关闭">&times;</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    /* ============================================================
+       定投导航仪 · 完整业务逻辑
+       包含：止盈横幅、底部抽屉、账户切换等全部功能
+       ============================================================ */
+    const state = { accounts: [], currentAccount: "", fundCounts: {}, funds: [] };
+    let activeFundCode = "";
+    let pendingFund = null;
+    let toastTimer = null;
+    let stopBannerDismissedCount = -1;
+    let stopBannerHits = [];
+
+    const $ = (id) => document.getElementById(id);
+    const els = {
+      pageHome: $("pageHome"),
+      pageDetail: $("pageDetail"),
+      accountAvatar: $("accountAvatar"),
+      currentAccountName: $("currentAccountName"),
+      accountFundSummary: $("accountFundSummary"),
+      fundList: $("fundList"),
+      emptyState: $("emptyState"),
+      detailTitle: $("detailTitle"),
+      detailSubtitle: $("detailSubtitle"),
+      detailContent: $("detailContent"),
+      accountModal: $("accountModal"),
+      addAccountModal: $("addAccountModal"),
+      buyModal: $("buyModal"),
+      accountList: $("accountList"),
+      toast: $("toast"),
+      newFundCode: $("newFundCode"),
+      newAccountName: $("newAccountName"),
+      importInput: $("importInput"),
+      buyModalTitle: $("buyModalTitle"),
+      buyModalSubtitle: $("buyModalSubtitle"),
+      buyModalFundCode: $("buyModalFundCode"),
+      buyRecordBadge: $("buyRecordBadge"),
+      buyTime: $("buyTime"),
+      buyPrice: $("buyPrice"),
+      buyAmount: $("buyAmount"),
+      buyAmountHint: $("buyAmountHint"),
+      buyShares: $("buyShares"),
+      stopProfitRow: $("stopProfitRow"),
+      stopProfitTarget: $("stopProfitTarget"),
+      btnRefreshAll: $("btnRefreshAll"),
+      btnNextFund: $("btnNextFund"),
+      remarkModal: $("remarkModal"),
+      remarkModalSubtitle: $("remarkModalSubtitle"),
+      remarkInput: $("remarkInput"),
+      btnCancelRemark: $("btnCancelRemark"),
+      btnConfirmRemark: $("btnConfirmRemark"),
+      stopProfitModal: $("stopProfitModal"),
+      stopProfitModalSubtitle: $("stopProfitModalSubtitle"),
+      newStopProfit: $("newStopProfit"),
+      btnCancelStopProfit: $("btnCancelStopProfit"),
+      btnConfirmStopProfit: $("btnConfirmStopProfit"),
+      reduceModal: $("reduceModal"),
+      reduceModalSubtitle: $("reduceModalSubtitle"),
+      reduceModalFundCode: $("reduceModalFundCode"),
+      reduceHeldBadge: $("reduceHeldBadge"),
+      reduceTime: $("reduceTime"),
+      reducePrice: $("reducePrice"),
+      reduceShares: $("reduceShares"),
+      btnCancelReduce: $("btnCancelReduce"),
+      btnConfirmReduce: $("btnConfirmReduce"),
+      fundCountBadge: $("fundCountBadge"),
+      homeHeader: $("homeHeader"),
+      stopBanner: $("stopBanner"),
+      stopBannerText: $("stopBannerText"),
+      stopBannerView: $("stopBannerView"),
+      stopBannerClose: $("stopBannerClose"),
+      securityModal: $("securityModal"),
+      oldPwd: $("oldPwd"),
+      newPwd: $("newPwd"),
+      newPwd2: $("newPwd2"),
+      btnCancelSecurity: $("btnCancelSecurity"),
+      btnConfirmChangePwd: $("btnConfirmChangePwd"),
+      btnLogout: $("btnLogout")
+    };
+
+    function htmlEscape(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[ch]);
+    }
+
+    function today() {
+      return new Date().toISOString().slice(0, 10);
+    }
+
+    function money(value) {
+      const num = Number(value || 0);
+      return num.toFixed(2);
+    }
+
+    function price(value) {
+      const num = Number(value || 0);
+      return num ? num.toFixed(4) : "--";
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2200);
+    }
+
+    const API_BASE = (location.hostname.endsWith(".pages.dev") || location.hostname.endsWith(".workers.dev")) ?
+      "https://dingtou-worker.bfzs.workers.dev" :
+      "";
+
+    async function api(path, options = {}) {
+      const config = { headers: { "Content-Type": "application/json" }, ...options };
+      if (config.body && typeof config.body !== "string") {
+        config.body = JSON.stringify(config.body);
+      }
+      const res = await fetch(API_BASE + path, config);
+      // 会话过期或未登录：后端一律返回 401（改密失败等业务错误返回的是 400，不会误伤）
+      // 直接刷新回登录页，否则界面会停在一个只会弹 toast 的死状态
+      if (res.status === 401) {
+        location.reload();
+        throw new Error("登录已过期，正在返回登录页...");
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch (err) {
+        throw new Error(`服务器返回异常 (HTTP ${res.status})`);
+      }
+      if (!res.ok || data.success === false) {
+        throw new Error(data.message || "请求失败");
+      }
+      return data;
+    }
+
+    async function loadState() {
+      const data = await api("/api/state");
+      state.accounts = data.accounts || [];
+      state.currentAccount = data.currentAccount || "";
+      state.fundCounts = data.fundCounts || {};
+      state.funds = data.funds || [];
+      renderAccountHeader();
+      renderFundList();
+      updateStopBanner();
+      if (activeFundCode) {
+        const fund = findFund(activeFundCode);
+        if (fund) renderDetail(fund);
+        else showHome();
+      }
+    }
+
+    async function migrateLegacyLocalStorage() {
+      if (localStorage.getItem("定投助手_server_migrated")) return;
+      const rawAccounts = localStorage.getItem("定投助手_accounts");
+      if (!rawAccounts) {
+        localStorage.setItem("定投助手_server_migrated", "1");
+        return;
+      }
+      try {
+        const accounts = JSON.parse(rawAccounts);
+        if (!Array.isArray(accounts) || accounts.length === 0) return;
+        const fundsByAccount = {};
+        accounts.forEach((acc) => {
+          const name = acc.name;
+          const rawFunds = localStorage.getItem("定投助手_funds_" + name);
+          fundsByAccount[name] = rawFunds ? JSON.parse(rawFunds) : [];
+        });
+        await api("/api/import-all", {
+          method: "POST",
+          body: { accounts, currentAccount: accounts[0].name, fundsByAccount }
+        });
+        localStorage.setItem("定投助手_server_migrated", "1");
+        showToast("已迁移旧版本地数据");
+      } catch (err) {
+        localStorage.setItem("定投助手_server_migrated", "1");
+      }
+    }
+
+    function currentAccount() {
+      return state.accounts.find((acc) => acc.name === state.currentAccount) || state.accounts[0] || {};
+    }
+
+    function findFund(code) {
+      return state.funds.find((fund) => fund.code === code);
+    }
+
+    function signalClass(level, prefix = "tag") {
+      return `${prefix}-${level || "gray"}`;
+    }
+
+    function renderAccountHeader() {
+      const acc = currentAccount();
+      const count = state.fundCounts[state.currentAccount] || 0;
+      els.currentAccountName.textContent = acc.name || "主力";
+      els.accountAvatar.style.backgroundColor = acc.color || "hsl(245, 70%, 55%)";
+      els.accountAvatar.innerHTML = `<span>${htmlEscape((acc.name || "主").charAt(0).toUpperCase())}</span>`;
+      els.accountFundSummary.textContent = `当前账户 ${count} 只基金`;
+      els.fundCountBadge.textContent = `${count} 只`;
+    }
+
+    /* ============================================================
+       renderFundList - 基金列表渲染
+       基金卡片使用 border-left 显示状态竖条 (参考副本文件)
+       基金名称颜色与竖条颜色一致
+       备注已添加背景色 #fdf4ff 和圆角
+       ============================================================ */
+    function renderFundList() {
+      if (!state.funds.length) {
+        els.fundList.innerHTML = "";
+        els.emptyState.classList.remove("hidden");
+        return;
+      }
+      els.emptyState.classList.add("hidden");
+      els.fundList.innerHTML = state.funds.map((fund) => {
+        const signal = fund.summary.signal;
+        const level = signal.level || "gray";
+        const tagLevel = signal.tagLevel || level;
+        // 名称颜色与竖条一致：绿色→text-green，橙色→text-orange，红色→text-red
+        const nameClass = level === "green" ? "text-green" :
+          level === "orange" ? "text-orange" :
+          level === "red" ? "text-red" : "";
+        return `
+            <article class="fund-card level-${level}" data-code="${htmlEscape(fund.code)}">
+              <div class="fund-card-head">
+                <div>
+                  <h3 class="fund-name ${nameClass}">${htmlEscape(fund.name || "正在加载...")}</h3>
+                  <span class="fund-code">${htmlEscape(fund.code)}</span>
+                </div>
+                <button class="delete-btn" data-action="delete-fund" data-code="${htmlEscape(fund.code)}">删除</button>
+              </div>
+              <div class="fund-body">
+                <span class="fund-price mono">${price(fund.currentPrice)}</span>
+                <span class="fund-target mono">${htmlEscape(fund.summary.nextTarget.text)}</span>
+                <span class="fund-tag ${signalClass(tagLevel)}">${htmlEscape(signal.label)}</span>
+              </div>
+              ${fund.remark ? `<div class="fund-remark">📝 ${htmlEscape(fund.remark)}</div>` : ""}
+            </article>`;
+      }).join("");
+    }
+
+    /* ----- 止盈目标提醒悬浮窗 ----- */
+    function updateStopBanner() {
+      const hits = state.funds.filter((fund) => fund.summary && fund.summary.signal && fund.summary.signal.level === "red");
+      stopBannerHits = hits;
+      const n = hits.length;
+      const onHome = !activeFundCode;
+      if (n > 0 && onHome && stopBannerDismissedCount < n) {
+        els.stopBannerText.textContent = `${n} 只基金达到止盈目标`;
+        els.stopBanner.classList.add("show");
+      } else {
+        els.stopBanner.classList.remove("show");
+      }
+    }
+
+    function jumpToStopProfitFund() {
+      const first = stopBannerHits[0];
+      if (!first) return;
+      const card = els.fundList.querySelector(`.fund-card.level-red[data-code="${first.code}"]`);
+      if (!card) return;
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.remove("flash");
+      void card.offsetWidth;
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 1700);
+    }
+
+    function renderAccounts() {
+      els.accountList.innerHTML = state.accounts.map((acc) => {
+        const active = acc.name === state.currentAccount;
+        const count = state.fundCounts[acc.name] || 0;
+        const deleteButton = state.accounts.length > 1 ?
+          `<button class="account-list-delete" data-action="delete-account" data-name="${htmlEscape(acc.name)}">删除</button>` :
+          "";
+        return `
+            <div class="account-list-item ${active ? "active" : ""}" data-account="${htmlEscape(acc.name)}">
+              <div class="account-list-avatar" style="background-color:${htmlEscape(acc.color)}"><span>${htmlEscape(acc.name.charAt(0).toUpperCase())}</span></div>
+              <div class="account-list-info">
+                <div class="account-list-name">${htmlEscape(acc.name)}</div>
+                <div class="account-list-count">${count} 只基金</div>
+              </div>
+              ${deleteButton}
+            </div>`;
+      }).join("");
+    }
+
+    function showHome() {
+      activeFundCode = "";
+      els.pageHome.style.display = "block";
+      els.pageDetail.style.display = "none";
+      document.body.style.overflow = "";
+      updateStopBanner();
+    }
+
+    function showDetail(code) {
+      const fund = findFund(code);
+      if (!fund) return;
+      activeFundCode = code;
+      renderDetail(fund);
+      els.pageHome.style.display = "none";
+      els.pageDetail.style.display = "block";
+      document.body.style.overflow = "hidden";
+      // 滚动容器是 .page-detail(position:fixed;overflow-y:auto)，不是内部的 .detail-content
+      els.pageDetail.scrollTop = 0;
+      updateStopBanner();
+    }
+
+    function renderDetail(fund) {
+      const s = fund.summary;
+      const signal = s.signal;
+      const profit = s.profit;
+      const records = fund.records || [];
+      els.detailTitle.textContent = fund.name || "基金详情";
+      els.detailSubtitle.textContent = fund.code || "";
+      els.btnNextFund.style.visibility = state.funds.length > 1 ? "visible" : "hidden";
+      const firstChange = Number(s.firstBuyChange || 0);
+      const recordsHtml = records.length ? records.map((record, index) => `
+          <div class="record-card">
+            <div class="record-info">
+              <div class="record-index">第 ${index + 1} 份</div>
+              <div class="record-date">${htmlEscape(record.buyTime || "")}</div>
+            </div>
+            <div class="record-values">
+              <span class="record-value mono">${price(record.price)}</span>
+              <span class="record-value">${money(record.amount)}元</span>
+              <span class="record-value mono">${money(record.shares)}份</span>
+              <button class="record-delete" data-action="delete-record" data-index="${index}">删除</button>
+            </div>
+          </div>`).join("") :
+        `<div class="empty-state" style="padding:30px 0;"><div class="empty-icon" style="font-size:40px;">📋</div><div class="empty-title">暂无买入记录</div></div>`;
+      const reductions = fund.reductions || [];
+      const reductionsHtml = reductions.length ? reductions.map((r, index) => `
+          <div class="record-card">
+            <div class="record-info">
+              <div class="record-index">减仓</div>
+              <div class="record-date">${htmlEscape(r.reduceTime || "")}</div>
+            </div>
+            <div class="record-values">
+              <span class="record-value mono">${price(r.price)}</span>
+              <span class="record-value mono">${money(r.shares)}份</span>
+              <span class="record-value">${money(r.amount)}元</span>
+              <button class="record-delete" data-action="delete-reduction" data-index="${index}">删除</button>
+            </div>
+          </div>`).join("") :
+        `<div class="empty-state" style="padding:30px 0;"><div class="empty-icon" style="font-size:40px;">📋</div><div class="empty-title">暂无减仓记录</div></div>`;
+      const firstChangeHtml = records.length ?
+        `<div class="first-change ${firstChange >= 0 ? "first-up" : "first-down"}">
+            距首次买入已${firstChange >= 0 ? "上涨" : "下跌"} ${Math.abs(firstChange).toFixed(2)}%</div>` :
+        "";
+      els.detailContent.innerHTML = `
+          <div class="detail-card">
+            <div class="detail-card-head">
+              <div>
+                <h2 class="detail-fund-name">${htmlEscape(fund.name || "正在加载...")}</h2>
+                <div class="detail-fund-code">${htmlEscape(fund.code)}</div>
+              </div>
+              <button class="delete-btn" data-action="delete-fund-detail">删除</button>
+            </div>
+            <div class="metric-grid">
+              <div class="metric-box">
+                <div class="metric-label">最新净值</div>
+                <div class="metric-value mono">${price(fund.currentPrice)}</div>
+                <div class="metric-date">${htmlEscape(fund.jzrq || "--")}</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-label">下次买入目标</div>
+                <div class="metric-value mono text-primary">${htmlEscape(s.nextTarget.text)}</div>
+              </div>
+            </div>
+            <div class="signal-box ${signalClass(signal.level, "signal")}">${htmlEscape(signal.label)}</div>
+            ${fund.remark ? `<div style="padding:14px 16px;background:#fdf4ff;border-radius:10px;margin-bottom:16px;font-size:14px;color:#be185d;font-weight:600;">📝 ${htmlEscape(fund.remark)}</div>` : ""}
+            <div class="progress-wrap">
+              <div class="progress-head">
+                <span>进度 ${records.length} / 10 份</span>
+                <span>模型价 ${htmlEscape(s.theoretical)}</span>
+              </div>
+              <div class="progress-dots">
+                ${Array.from({ length: 10 }, (_, i) => `<span class="dot ${i < records.length ? "active" : ""}"></span>`).join("")}
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="profit-section" style="margin-bottom:0;">
+              <div class="profit-header">
+                <div class="profit-title">持仓总盈亏</div>
+                <button class="stopprofit-btn" data-action="change-stopprofit">止盈 ${htmlEscape(fund.stopProfitTarget || 20)}%</button>
+              </div>
+              <div class="profit-grid">
+                <div class="profit-item">
+                  <div class="profit-item-label">持仓成本</div>
+                  <div class="profit-item-value">${money(profit.totalCost)}元</div>
+                </div>
+                <div class="profit-item">
+                  <div class="profit-item-label">总市值</div>
+                  <div class="profit-item-value">${money(profit.totalValue)}元</div>
+                </div>
+                <div class="profit-item">
+                  <div class="profit-item-label">持仓份额</div>
+                  <div class="profit-item-value mono">${money(profit.totalShares)}份</div>
+                </div>
+                <div class="profit-item">
+                  <div class="profit-item-label">已实现收益</div>
+                  <div class="profit-item-value ${profit.realizedProfit >= 0 ? "text-red" : "text-green"}">${profit.realizedProfit >= 0 ? "+" : ""}${money(profit.realizedProfit)}元</div>
+                </div>
+              </div>
+              <div class="profit-divider"></div>
+              <div class="profit-line">
+                <span class="profit-line-label">总盈亏</span>
+                <span class="profit-line-value ${profit.profit >= 0 ? "text-red" : "text-green"}">${profit.profit >= 0 ? "+" : ""}${money(profit.profit)}元 (${Number(profit.profitPercent || 0).toFixed(2)}%)</span>
+              </div>
+              <div class="profit-line">
+                <span class="profit-line-label">年化收益</span>
+                <span class="profit-line-value text-primary">${htmlEscape(s.annualized)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-grid">
+            <button class="action-btn action-btn-primary" data-action="record-buy">💰 记录买入</button>
+            <button class="action-btn" data-action="reduce">📉 减仓</button>
+            <button class="action-btn" data-action="change-stopprofit">🎯 改止盈</button>
+            <button class="action-btn" data-action="refresh-detail">🔄 刷新数据</button>
+            <button class="action-btn action-btn-full" data-action="remark">📝 添加备注</button>
+          </div>
+
+          <div class="records-section">
+            <div class="records-title">买入记录</div>
+            ${recordsHtml}
+            ${firstChangeHtml}
+          </div>
+
+          <div class="records-section">
+            <div class="records-title">减仓记录</div>
+            ${reductionsHtml}
+          </div>`;
+    }
+
+    /* ----- 底部抽屉式弹窗 ----- */
+    function openModal(modalId) {
+      const overlay = document.getElementById(modalId + "Overlay");
+      const sheet = document.getElementById(modalId);
+      if (overlay) overlay.classList.add("show");
+      if (sheet) sheet.classList.add("show");
+      document.body.style.overflow = "hidden";
+    }
+
+    function closeModal(modalId) {
+      const overlay = document.getElementById(modalId + "Overlay");
+      const sheet = document.getElementById(modalId);
+      if (overlay) overlay.classList.remove("show");
+      if (sheet) sheet.classList.remove("show");
+      if (!document.querySelector(".modal-overlay.show")) {
+        // 仍停留在详情页时不能解锁 body，否则详情页滚到底会带动背后首页一起滚
+        document.body.style.overflow = activeFundCode ? "hidden" : "";
+      }
+    }
+
+    async function addAccount() {
+      const name = els.newAccountName.value.trim();
+      try {
+        await api("/api/accounts", { method: "POST", body: { name } });
+        closeModal("addAccountModal");
+        els.newAccountName.value = "";
+        await loadState();
+        showToast("账户添加成功");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function switchAccount(name) {
+      try {
+        await api("/api/current-account", { method: "POST", body: { name } });
+        activeFundCode = "";
+        stopBannerDismissedCount = -1; // 换账户后止盈横幅的关闭状态要清掉，否则新账户的提醒会被吞
+        closeModal("accountModal");
+        await loadState();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function deleteAccount(name) {
+      if (!confirm(`确定删除账户 "${name}" 吗？所有数据将丢失！`)) return;
+      try {
+        await api("/api/accounts?name=" + encodeURIComponent(name), { method: "DELETE" });
+        await loadState();
+        renderAccounts();
+        showToast("账户已删除");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function addFund() {
+      const code = els.newFundCode.value.trim();
+      if (!/^\d{6}$/.test(code)) {
+        showToast("请输入 6 位基金代码");
+        return;
+      }
+      if (state.funds.some((fund) => fund.code === code)) {
+        showToast("该基金已存在");
+        return;
+      }
+      try {
+        showToast("正在获取基金信息...");
+        const data = await api("/api/fund-data?code=" + encodeURIComponent(code));
+        pendingFund = data;
+        openBuyModal(data, true);
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    function openBuyModal(fund, isNew) {
+      const records = isNew ? [] : (fund.records || []);
+      const recordNum = records.length + 1;
+      els.buyModalTitle.textContent = "记录成交";
+      els.buyModalSubtitle.textContent = `${fund.name} (${fund.code})`;
+      els.buyModalFundCode.textContent = fund.code;
+      els.buyRecordBadge.textContent = recordNum === 1 ? "首笔买入" : `第${recordNum}份`;
+      els.buyTime.value = today();
+      els.buyPrice.value = isNew ? (fund.dwjz || "") : (fund.currentPrice || "");
+      // 预填后端算好的建议金额：新基金取 /api/fund-data 的 nextAmount，已有基金取 summary.nextTarget.amount
+      // 取不到就留空——错的默认值(如旧版写死的 1000)比空值危险，会被直接写进持仓记录
+      const suggested = isNew ?
+        fund.nextAmount :
+        (fund.summary && fund.summary.nextTarget ? fund.summary.nextTarget.amount : null);
+      if (typeof suggested === "number" && suggested > 0) {
+        els.buyAmount.value = suggested;
+        els.buyAmountHint.textContent = `建议 ${suggested} 元`;
+      } else {
+        els.buyAmount.value = "";
+        els.buyAmountHint.textContent = "";
+      }
+      els.buyShares.value = "";
+      updateShares(); // 程序化赋值不会触发 input 事件，手动算一次份额
+      if (records.length === 0) {
+        els.stopProfitRow.style.display = "block";
+        els.stopProfitTarget.value = fund.stopProfitTarget || 20;
+      } else {
+        els.stopProfitRow.style.display = "none";
+      }
+      openModal("buyModal");
+    }
+
+    function closeBuyModal() {
+      pendingFund = null;
+      closeModal("buyModal");
+    }
+
+    function openRemarkModal(fund) {
+      els.remarkModalSubtitle.textContent = fund.name || "";
+      els.remarkInput.value = fund.remark || "";
+      openModal("remarkModal");
+    }
+
+    async function confirmRemark() {
+      const remark = els.remarkInput.value.trim();
+      try {
+        await api("/api/remark", {
+          method: "POST",
+          body: { code: activeFundCode, remark }
+        });
+        closeModal("remarkModal");
+        await loadState();
+        showToast("备注已保存");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    function openStopProfitModal(fund) {
+      els.stopProfitModalSubtitle.textContent = fund.name || "";
+      els.newStopProfit.value = fund.stopProfitTarget || 20;
+      openModal("stopProfitModal");
+    }
+
+    async function confirmStopProfit() {
+      const target = Number(els.newStopProfit.value || 20);
+      try {
+        await api("/api/stop-profit", {
+          method: "POST",
+          body: { code: activeFundCode, stopProfitTarget: target }
+        });
+        closeModal("stopProfitModal");
+        await loadState();
+        showToast("止盈目标已更新");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    function openReduceModal(fund) {
+      const buyShares = (fund.records || []).reduce((s, r) => s + (Number(r.shares) || 0), 0);
+      const reduceShares = (fund.reductions || []).reduce((s, r) => s + (Number(r.shares) || 0), 0);
+      const held = buyShares - reduceShares;
+      els.reduceModalSubtitle.textContent = fund.name || "";
+      els.reduceModalFundCode.textContent = fund.code;
+      els.reduceHeldBadge.textContent = `持仓 ${held.toFixed(2)} 份`;
+      els.reduceTime.value = today();
+      els.reducePrice.value = fund.currentPrice || "";
+      els.reduceShares.value = "";
+      openModal("reduceModal");
+    }
+
+    async function confirmReduce() {
+      const payload = {
+        reduceTime: els.reduceTime.value || today(),
+        price: Number(els.reducePrice.value),
+        shares: Number(els.reduceShares.value || 0)
+      };
+      if (!payload.price || payload.price <= 0) {
+        showToast("请输入有效减仓净值");
+        return;
+      }
+      if (!payload.shares || payload.shares <= 0) {
+        showToast("请输入有效减仓份额");
+        return;
+      }
+      try {
+        await api("/api/reductions", {
+          method: "POST",
+          body: { code: activeFundCode, ...payload }
+        });
+        closeModal("reduceModal");
+        await loadState();
+        showToast("减仓已记录");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function deleteReduction(index) {
+      if (!confirm("确定删除这条减仓记录吗？")) return;
+      try {
+        await api(`/api/reductions?code=${encodeURIComponent(activeFundCode)}&index=${index}`, { method: "DELETE" });
+        await loadState();
+        showToast("减仓记录已删除");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function confirmBuy() {
+      const payload = {
+        buyTime: els.buyTime.value || today(),
+        price: Number(els.buyPrice.value),
+        amount: Number(els.buyAmount.value || 0),
+        shares: Number(els.buyShares.value || 0),
+        stopProfitTarget: Number(els.stopProfitTarget.value || 20)
+      };
+      if (!payload.price || payload.price <= 0) {
+        showToast("请输入有效价格");
+        return;
+      }
+      try {
+        if (pendingFund) {
+          payload.code = pendingFund.code;
+          await api("/api/funds", { method: "POST", body: payload });
+          els.newFundCode.value = "";
+        } else {
+          payload.code = activeFundCode;
+          await api("/api/records", { method: "POST", body: payload });
+        }
+        pendingFund = null;
+        closeModal("buyModal");
+        await loadState();
+        showToast("记录成功");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function deleteFund(code) {
+      if (!confirm("确定删除该基金吗？")) return;
+      try {
+        await api("/api/funds?code=" + encodeURIComponent(code), { method: "DELETE" });
+        await loadState();
+        if (activeFundCode === code) showHome();
+        showToast("基金已删除");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function deleteRecord(index) {
+      if (!confirm("确定删除这条买入记录吗？")) return;
+      try {
+        await api(`/api/records?code=${encodeURIComponent(activeFundCode)}&index=${index}`, { method: "DELETE" });
+        await loadState();
+        showToast("记录已删除");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function refreshFund(code) {
+      try {
+        showToast("正在刷新...");
+        await api("/api/refresh", { method: "POST", body: { code } });
+        await loadState();
+        showToast("刷新成功");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function refreshAllFunds() {
+      if (!state.funds.length) {
+        showToast("暂无基金");
+        return;
+      }
+      els.btnRefreshAll.textContent = "⏳";
+      els.btnRefreshAll.disabled = true;
+      try {
+        await api("/api/refresh-all", { method: "POST", body: {} });
+        await loadState();
+        showToast("刷新完成");
+      } catch (err) {
+        showToast(err.message);
+      } finally {
+        els.btnRefreshAll.textContent = "🔄";
+        els.btnRefreshAll.disabled = false;
+      }
+    }
+
+    async function exportData() {
+      try {
+        const res = await api("/api/export");
+        const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `定投助手_${state.currentAccount}_${today()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        showToast("导出成功");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function importData(file) {
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        await api("/api/import", { method: "POST", body: data });
+        await loadState();
+        showToast("导入成功");
+      } catch (err) {
+        showToast(err.message || "导入文件格式错误");
+      } finally {
+        els.importInput.value = "";
+      }
+    }
+
+    /* ----- 账号安全：修改密码 / 退出登录 ----- */
+    function openSecurityModal() {
+      els.oldPwd.value = "";
+      els.newPwd.value = "";
+      els.newPwd2.value = "";
+      openModal("securityModal");
+    }
+
+    async function confirmChangePwd() {
+      const oldPassword = els.oldPwd.value;
+      const newPassword = els.newPwd.value;
+      if (!oldPassword) {
+        showToast("请输入原密码");
+        return;
+      }
+      if (newPassword.length < 6) {
+        showToast("新密码至少 6 位");
+        return;
+      }
+      if (newPassword !== els.newPwd2.value) {
+        showToast("两次输入的新密码不一致");
+        return;
+      }
+      if (newPassword === oldPassword) {
+        showToast("新密码不能与原密码相同");
+        return;
+      }
+      try {
+        await api("/api/change-password", {
+          method: "POST",
+          body: { oldPassword, newPassword }
+        });
+        closeModal("securityModal");
+        els.oldPwd.value = "";
+        els.newPwd.value = "";
+        els.newPwd2.value = "";
+        showToast("密码已修改");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function logout() {
+      if (!confirm("确定退出登录吗？")) return;
+      try {
+        await api("/api/logout", { method: "POST", body: {} });
+      } catch (err) {
+        // 退出失败也照样回登录页，本地不该继续停留在已登录界面
+      }
+      location.reload();
+    }
+
+    function updateShares() {
+      const amount = Number(els.buyAmount.value);
+      const buyPrice = Number(els.buyPrice.value);
+      if (amount && buyPrice && buyPrice > 0) {
+        els.buyShares.value = (amount / buyPrice).toFixed(2);
+      }
+    }
+
+    function bindEvents() {
+      $("btnSwitchAccount").addEventListener("click", () => { renderAccounts();
+        openModal("accountModal"); });
+      $("btnAddAccount").addEventListener("click", () => { els.newAccountName.value = "";
+        openModal("addAccountModal"); });
+      $("btnCloseAccountModal").addEventListener("click", () => closeModal("accountModal"));
+      $("btnCancelAddAccount").addEventListener("click", () => closeModal("addAccountModal"));
+      $("btnConfirmAddAccount").addEventListener("click", addAccount);
+      $("btnAddFund").addEventListener("click", addFund);
+      $("btnRefreshAll").addEventListener("click", refreshAllFunds);
+      $("btnExport").addEventListener("click", exportData);
+      $("btnImport").addEventListener("click", () => els.importInput.click());
+      $("importInput").addEventListener("change", (e) => importData(e.target.files[0]));
+      $("btnBack").addEventListener("click", showHome);
+      $("btnNextFund").addEventListener("click", () => {
+        if (state.funds.length <= 1) return;
+        const index = state.funds.findIndex((fund) => fund.code === activeFundCode);
+        const next = state.funds[(index + 1) % state.funds.length];
+        if (next) showDetail(next.code);
+      });
+      $("btnCancelBuy").addEventListener("click", closeBuyModal);
+      $("btnConfirmBuy").addEventListener("click", confirmBuy);
+      els.buyAmount.addEventListener("input", updateShares);
+      els.buyPrice.addEventListener("input", updateShares);
+      els.newFundCode.addEventListener("keydown", (e) => { if (e.key === "Enter") addFund(); });
+      els.newAccountName.addEventListener("keydown", (e) => { if (e.key === "Enter") addAccount(); });
+      els.accountList.addEventListener("click", (e) => {
+        const del = e.target.closest("[data-action='delete-account']");
+        if (del) {
+          e.stopPropagation();
+          deleteAccount(del.dataset.name);
+          return;
+        }
+        const item = e.target.closest("[data-account]");
+        if (item) switchAccount(item.dataset.account);
+      });
+      els.fundList.addEventListener("click", (e) => {
+        const del = e.target.closest("[data-action='delete-fund']");
+        if (del) {
+          e.stopPropagation();
+          deleteFund(del.dataset.code);
+          return;
+        }
+        const card = e.target.closest("[data-code]");
+        if (card) showDetail(card.dataset.code);
+      });
+      els.detailContent.addEventListener("click", (e) => {
+        const action = e.target.closest("[data-action]");
+        if (!action) return;
+        const type = action.dataset.action;
+        if (type === "delete-fund-detail") deleteFund(activeFundCode);
+        if (type === "record-buy") {
+          const fund = findFund(activeFundCode);
+          if (fund) openBuyModal(fund, false);
+        }
+        if (type === "refresh-detail") refreshFund(activeFundCode);
+        if (type === "remark") {
+          const fund = findFund(activeFundCode);
+          if (fund) openRemarkModal(fund);
+        }
+        if (type === "change-stopprofit") {
+          const fund = findFund(activeFundCode);
+          if (fund) openStopProfitModal(fund);
+        }
+        if (type === "reduce") {
+          const fund = findFund(activeFundCode);
+          if (fund) openReduceModal(fund);
+        }
+        if (type === "delete-record") deleteRecord(Number(action.dataset.index));
+        if (type === "delete-reduction") deleteReduction(Number(action.dataset.index));
+      });
+      document.querySelectorAll(".modal-overlay").forEach((ov) => {
+        ov.addEventListener("click", () => {
+          const id = ov.id.replace("Overlay", "");
+          if (id === "buyModal") closeBuyModal();
+          else if (id === "remarkModal") closeModal("remarkModal");
+          else if (id === "stopProfitModal") closeModal("stopProfitModal");
+          else if (id === "reduceModal") closeModal("reduceModal");
+          else closeModal(id);
+        });
+      });
+      els.btnCancelRemark.addEventListener("click", () => closeModal("remarkModal"));
+      els.btnConfirmRemark.addEventListener("click", confirmRemark);
+      els.btnCancelStopProfit.addEventListener("click", () => closeModal("stopProfitModal"));
+      els.btnConfirmStopProfit.addEventListener("click", confirmStopProfit);
+      els.btnCancelReduce.addEventListener("click", () => closeModal("reduceModal"));
+      els.btnConfirmReduce.addEventListener("click", confirmReduce);
+
+      $("btnSecurity").addEventListener("click", openSecurityModal);
+      els.btnCancelSecurity.addEventListener("click", () => closeModal("securityModal"));
+      els.btnConfirmChangePwd.addEventListener("click", confirmChangePwd);
+      els.btnLogout.addEventListener("click", logout);
+      els.newPwd2.addEventListener("keydown", (e) => { if (e.key === "Enter") confirmChangePwd(); });
+
+      els.stopBannerClose.addEventListener("click", () => {
+        stopBannerDismissedCount = stopBannerHits.length;
+        els.stopBanner.classList.remove("show");
+      });
+      els.stopBannerView.addEventListener("click", jumpToStopProfitFund);
+
+      window.addEventListener("scroll", () => {
+        if (els.homeHeader) {
+          els.homeHeader.classList.toggle("scrolled", window.scrollY > 8);
+        }
+      }, { passive: true });
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      bindEvents();
+      try {
+        await migrateLegacyLocalStorage();
+        await loadState();
+      } catch (err) {
+        showToast(err.message || "加载失败");
+      }
+    });
+  </script>
+</body>
+</html>
