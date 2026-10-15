@@ -6,10 +6,31 @@
 const KV_KEY = "store";
 
 /* ---------------- 工具函数 ---------------- */
+/* 按 Asia/Shanghai 输出 YYYY-MM-DD。
+   Workers 运行时是 UTC：本地 getter 会把北京时间 0-8 点算成前一天；
+   净值时间戳（东财返回）按北京日历归属，直接用 toISOString 也会偏一天。
+   故所有"日期"口径统一走本函数。 */
+function shanghaiDateStr(d) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(d);
+    let y = "", m = "", day = "";
+    for (const p of parts) {
+      if (p.type === "year") y = p.value;
+      else if (p.type === "month") m = p.value;
+      else if (p.type === "day") day = p.value;
+    }
+    return `${y}-${m}-${day}`;
+  } catch {
+    return new Date(d.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
 function todayStr() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return shanghaiDateStr(new Date());
 }
 function nowIso() {
   return new Date().toISOString();
@@ -275,7 +296,7 @@ async function fetchFundData(code) {
       let ts = xValues[xValues.length - 1];
       if (ts > 9999999999) ts = ts / 1000;
       try {
-        latestDate = new Date(ts * 1000).toISOString().slice(0, 10);
+        latestDate = shanghaiDateStr(new Date(ts * 1000));
       } catch {
         latestDate = todayStr();
       }
