@@ -492,6 +492,48 @@
       font-weight: 600;
     }
 
+    /* ============================================================
+       卡片 meta 行：层级 + 触发价 + 距触发差距标签（≤1% 高亮）
+       ============================================================ */
+    .fund-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .fund-layer {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      background: var(--bg);
+      border-radius: 999px;
+      padding: 3px 10px;
+      letter-spacing: 0.2px;
+    }
+    .fund-trigger {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      font-family: ui-monospace, monospace;
+    }
+    .fund-gap {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 999px;
+    }
+    .fund-gap.hot {
+      background: var(--warning-light);
+      color: #92400e;
+    }
+    .fund-gap.cold {
+      background: var(--primary-light);
+      color: var(--primary-dark);
+    }
+
     /* Empty State */
     .empty-state {
       text-align: center;
@@ -599,6 +641,102 @@
       padding-bottom: calc(32px + var(--safe-bottom));
     }
 
+    /* ============================================================
+       设置页（4 卡：策略参数 / Zoho 通知 / 数据备份 / AI 分析）
+       ============================================================ */
+    .set-card {
+      background: var(--card);
+      border-radius: var(--radius-xl);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+    .set-card-title {
+      font-size: 15px;
+      font-weight: 800;
+      margin-bottom: 12px;
+    }
+    .set-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      padding: 7px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .set-row:last-of-type {
+      border-bottom: none;
+    }
+    .set-row span {
+      color: var(--text-secondary);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .set-row b {
+      font-weight: 800;
+      text-align: right;
+    }
+    .set-mini {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      line-height: 1.7;
+      margin-top: 10px;
+    }
+    .set-input {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 13px;
+      outline: none;
+      background: var(--bg);
+      font-family: ui-monospace, monospace;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .set-input:focus {
+      border-color: var(--primary);
+      background: var(--card);
+    }
+    .set-btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .set-btn {
+      flex: 1;
+      padding: 11px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      transition: transform 0.15s;
+    }
+    .set-btn:active {
+      transform: scale(0.97);
+    }
+    .set-btn.ghost {
+      background: var(--bg);
+      color: var(--text-secondary);
+    }
+    .set-url {
+      font-size: 11px;
+      background: var(--bg);
+      border-radius: 8px;
+      padding: 9px 10px;
+      margin-top: 8px;
+      word-break: break-all;
+      color: var(--text-secondary);
+    }
+    .set-disclaimer {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      text-align: center;
+      line-height: 1.8;
+      padding: 8px 0 20px;
+    }
+
     /* Detail Card */
     .detail-card {
       background: var(--card);
@@ -691,6 +829,41 @@
       background: #f3f4f6;
     }
 
+    /* 信号盒多行增强（标题 + 说明行） */
+    .signal-box .sig-title {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .signal-box .sig-desc {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.7;
+      opacity: 0.92;
+    }
+    .signal-box .sig-desc b {
+      font-weight: 800;
+      font-family: ui-monospace, monospace;
+    }
+
+    /* 距触发差距小标签（详情页复用） */
+    .gaptag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 1px 8px;
+      border-radius: 999px;
+    }
+    .gaptag.hot {
+      background: var(--warning-light);
+      color: #92400e;
+    }
+    .gaptag.cold {
+      background: var(--primary-light);
+      color: var(--primary-dark);
+    }
+
     /* Progress */
     .progress-wrap {
       margin-bottom: 16px;
@@ -717,6 +890,68 @@
     .dot.active {
       background: var(--success);
       box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+    }
+
+    /* ============================================================
+       加仓计算表（理想剧本 10 行 + 当前行高亮 + 实际对照行）
+       ============================================================ */
+    .ideal-title {
+      font-size: 15px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .ideal-sub {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+    .ideal-grid {
+      display: grid;
+      grid-template-columns: 46px 1fr 1fr 1fr;
+      gap: 4px;
+    }
+    .ideal-grid .ih {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      text-align: center;
+      padding: 4px 2px;
+    }
+    .ideal-grid .ic {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 2px;
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+      color: var(--text-secondary);
+    }
+    .ideal-grid .ic.cur {
+      background: var(--primary-light);
+      color: var(--primary-dark);
+      font-weight: 800;
+    }
+    .ideal-actual {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+    .ideal-actual b {
+      font-family: ui-monospace, monospace;
+      color: var(--text);
+    }
+    .ideal-actual .beat {
+      color: var(--success);
+      font-weight: 800;
+    }
+    .ideal-actual .behind {
+      color: var(--warning);
+      font-weight: 800;
     }
 
     /* Profit Card */
@@ -1316,6 +1551,7 @@
             <button class="icon-btn" id="btnExport" title="导出">📤</button>
             <button class="icon-btn" id="btnRefreshAll" title="刷新">🔄</button>
             <button class="icon-btn" id="btnSecurity" title="账号安全">🔒</button>
+            <button class="icon-btn" id="btnSettings" title="设置">⚙️</button>
           </div>
         </div>
       </header>
@@ -1373,6 +1609,19 @@
         <button class="detail-next" id="btnNextFund">下一个 →</button>
       </header>
       <section class="detail-content" id="detailContent"></section>
+    </section>
+
+    <!-- Settings Page -->
+    <section id="pageSettings" class="page-detail">
+      <header class="detail-header">
+        <button class="detail-back" id="btnSettingsBack">←</button>
+        <div class="detail-title-wrap">
+          <div class="detail-title">设置</div>
+          <div class="detail-subtitle">策略 · 通知 · 备份 · AI 分析</div>
+        </div>
+        <span class="detail-back" style="visibility:hidden;box-shadow:none;background:none"></span>
+      </header>
+      <section class="detail-content" id="settingsContent"></section>
     </section>
   </main>
 
@@ -1611,7 +1860,11 @@
       newPwd2: $("newPwd2"),
       btnCancelSecurity: $("btnCancelSecurity"),
       btnConfirmChangePwd: $("btnConfirmChangePwd"),
-      btnLogout: $("btnLogout")
+      btnLogout: $("btnLogout"),
+      pageSettings: $("pageSettings"),
+      settingsContent: $("settingsContent"),
+      btnSettings: $("btnSettings"),
+      btnSettingsBack: $("btnSettingsBack")
     };
 
     function htmlEscape(value) {
@@ -1755,10 +2008,18 @@
         const signal = fund.summary.signal;
         const level = signal.level || "gray";
         const tagLevel = signal.tagLevel || level;
+        const st = fund.summary.state || {};
         // 名称颜色与竖条一致：绿色→text-green，橙色→text-orange，红色→text-red
         const nameClass = level === "green" ? "text-green" :
           level === "orange" ? "text-orange" :
           level === "red" ? "text-red" : "";
+        /* meta 行：层级 + 触发价 + 距触发差距（≤1% 高亮；>1% 信息已在信号文案中，不重复展示） */
+        const layer = st.level || 0;
+        const gap = (st.gapPct === null || st.gapPct === undefined) ? null : st.gapPct;
+        const gapHtml = (gap !== null && layer > 0 && gap <= 1)
+          ? `<span class="fund-gap hot">距触发 ${gap.toFixed(2)}%</span>` : "";
+        const triggerHtml = (st.triggerNav !== null && st.triggerNav !== undefined && layer > 0)
+          ? `<span class="fund-trigger">触发 ${price(st.triggerNav)}</span>` : "";
         return `
             <article class="fund-card level-${level}" data-code="${htmlEscape(fund.code)}">
               <div class="fund-card-head">
@@ -1773,6 +2034,11 @@
                 <span class="fund-target mono">${htmlEscape(fund.summary.nextTarget.text)}</span>
                 <span class="fund-tag ${signalClass(tagLevel)}">${htmlEscape(signal.label)}</span>
               </div>
+              <div class="fund-meta-row">
+                <span class="fund-layer">第 ${layer} 层 / 10</span>
+                ${triggerHtml}
+                ${gapHtml}
+              </div>
               ${fund.remark ? `<div class="fund-remark">📝 ${htmlEscape(fund.remark)}</div>` : ""}
             </article>`;
       }).join("");
@@ -1783,7 +2049,8 @@
       const hits = state.funds.filter((fund) => fund.summary && fund.summary.signal && fund.summary.signal.level === "red");
       stopBannerHits = hits;
       const n = hits.length;
-      const onHome = !activeFundCode;
+      // 仅首页展示；详情页/设置页不弹
+      const onHome = els.pageHome.style.display !== "none";
       if (n > 0 && onHome && stopBannerDismissedCount < n) {
         els.stopBannerText.textContent = `${n} 只基金达到止盈目标`;
         els.stopBanner.classList.add("show");
@@ -1827,6 +2094,7 @@
       activeFundCode = "";
       els.pageHome.style.display = "block";
       els.pageDetail.style.display = "none";
+      els.pageSettings.style.display = "none";
       document.body.style.overflow = "";
       updateStopBanner();
     }
@@ -1838,10 +2106,23 @@
       renderDetail(fund);
       els.pageHome.style.display = "none";
       els.pageDetail.style.display = "block";
+      els.pageSettings.style.display = "none";
       document.body.style.overflow = "hidden";
       // 滚动容器是 .page-detail(position:fixed;overflow-y:auto)，不是内部的 .detail-content
       els.pageDetail.scrollTop = 0;
       updateStopBanner();
+    }
+
+    /* 设置页：全屏二级页，返回后回到首页 */
+    function showSettings() {
+      activeFundCode = "";
+      els.pageHome.style.display = "none";
+      els.pageDetail.style.display = "none";
+      els.pageSettings.style.display = "block";
+      document.body.style.overflow = "hidden";
+      els.pageSettings.scrollTop = 0;
+      updateStopBanner();
+      renderSettings();
     }
 
     function renderDetail(fund) {
@@ -1886,6 +2167,69 @@
         `<div class="first-change ${firstChange >= 0 ? "first-up" : "first-down"}">
             距首次买入已${firstChange >= 0 ? "上涨" : "下跌"} ${Math.abs(firstChange).toFixed(2)}%</div>` :
         "";
+      /* 信号盒（6 态多行：标题 + 情境说明，字段来自 summary.state） */
+      const st = s.state || {};
+      const sigCls = signalClass(signal.level, "signal");
+      let sigDesc = "";
+      if (signal.state === "add") {
+        sigDesc = `买 <b>${money(st.nextAmount)}</b> 元（第 ${st.level + 1} 笔）｜ 触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b> ✓ 已跌破触发`;
+      } else if (signal.state === "take_profit") {
+        sigDesc = `市值 <b>${money(st.marketValue)}</b> 元 ≥ 目标 <b>${money(st.tpTargetMV)}</b> 元 ｜ 收益率 <b>${Number(st.returnRate || 0) >= 0 ? "+" : ""}${Number(st.returnRate || 0).toFixed(2)}%</b> ｜ 可记一笔卖出落袋`;
+      } else if (signal.state === "exhausted") {
+        sigDesc = `10 笔全部投满，持有等待反弹止盈（目标 ${htmlEscape(fund.stopProfitTarget || 20)}%）`;
+      } else if (signal.state === "resting") {
+        sigDesc = `本轮已止盈离场，可清空买入记录后重新建仓`;
+      } else if (signal.state === "init") {
+        sigDesc = `首笔 <b>${money(s.nextTarget.amount)}</b> 元 ｜ 参考净值 <b>${price(fund.currentPrice)}</b>（${htmlEscape(fund.jzrq || "待抓取")}）`;
+      } else if (signal.state === "stale") {
+        sigDesc = `净值数据异常，请点「刷新数据」重试`;
+      } else {
+        const gapTag = (st.gapPct === null || st.gapPct === undefined) ? "--"
+          : `<span class="gaptag ${st.gapPct <= 1 ? "hot" : "cold"}">${st.gapPct.toFixed(2)}%</span>`;
+        sigDesc = `下一触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b>（还差 ${gapTag}）`;
+      }
+      const sigHtml = `<div class="signal-box ${sigCls}"><div class="sig-title">${htmlEscape(signal.label)}</div><div class="sig-desc">${sigDesc}</div></div>`;
+      /* 加仓计算表（理想剧本 10 行 + 当前行高亮 + 实际对照行） */
+      const ideal = s.ideal;
+      let idealHtml = "";
+      if (ideal) {
+        const curN = st.level + 1;
+        const rowsHtml = ideal.rows.map((r) => {
+          const cur = (r.n === curN && signal.state !== "resting");
+          const cls = cur ? "ic cur" : "ic";
+          const lossTxt = r.n === 1 ? "0.00%" : r.lossPct.toFixed(2) + "%";
+          return `<div class="${cls}">${cur ? r.n + "→" : r.n}</div><div class="${cls}">${money(r.add)}</div><div class="${cls}">${money(r.cost)}</div><div class="${cls}">${lossTxt}</div>`;
+        }).join("");
+        const idealRow = (st.level >= 1 && st.level <= ideal.rows.length) ? ideal.rows[st.level - 1] : null;
+        let actualHtml = "";
+        if (st.actualCost) {
+          const rr = Number(st.returnRate || 0);
+          let beat = "";
+          if (idealRow && st.returnRate !== null && st.returnRate !== undefined) {
+            beat = rr >= -idealRow.lossPct
+              ? ` ｜ <span class="beat">跑赢剧本 ✓</span>`
+              : ` ｜ <span class="behind">落后剧本</span>`;
+          }
+          actualHtml = `<div class="ideal-actual">实际：成本 <b>${money(st.actualCost)}</b> 元 ｜ 实际收益率 <b>${rr >= 0 ? "+" : ""}${rr.toFixed(2)}%</b>${beat}</div>`;
+        }
+        idealHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">加仓计算表</div>
+            <div class="ideal-sub">理想剧本 · 首笔基准 ${price(ideal.p0)} · 满配累计 ${money(ideal.total)} 元 · 亏损锁线 ${ideal.limit}%</div>
+            <div class="ideal-grid">
+              <div class="ih">笔</div><div class="ih">金额</div><div class="ih">累计</div><div class="ih">理想亏损</div>
+              ${rowsHtml}
+            </div>
+            ${actualHtml}
+            <div class="ideal-sub" style="margin:10px 0 0;">序列随每只基金首投金额等比缩放；任意层反弹 5% 即回本。</div>
+          </div>`;
+      } else {
+        idealHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">加仓计算表</div>
+            <div class="ideal-sub">待建仓后生成（录入第一笔买入后展示理想剧本）</div>
+          </div>`;
+      }
       els.detailContent.innerHTML = `
           <div class="detail-card">
             <div class="detail-card-head">
@@ -1906,7 +2250,7 @@
                 <div class="metric-value mono text-primary">${htmlEscape(s.nextTarget.text)}</div>
               </div>
             </div>
-            <div class="signal-box ${signalClass(signal.level, "signal")}">${htmlEscape(signal.label)}</div>
+            ${sigHtml}
             ${fund.remark ? `<div style="padding:14px 16px;background:#fdf4ff;border-radius:10px;margin-bottom:16px;font-size:14px;color:#be185d;font-weight:600;">📝 ${htmlEscape(fund.remark)}</div>` : ""}
             <div class="progress-wrap">
               <div class="progress-head">
@@ -1918,7 +2262,7 @@
               </div>
             </div>
           </div>
-
+${idealHtml}
           <div class="detail-card">
             <div class="profit-section" style="margin-bottom:0;">
               <div class="profit-header">
@@ -2298,6 +2642,102 @@
       }
     }
 
+    /* ----- 设置页：策略参数 / Zoho 通知 / 数据备份 / AI 分析 ----- */
+    let settingsCache = { strategy: {}, notify: {} };
+
+    async function renderSettings() {
+      let cfg = { strategy: {}, notify: {} };
+      try {
+        const res = await api("/api/settings");
+        cfg = res.data || cfg;
+      } catch (err) {
+        showToast(err.message);
+      }
+      settingsCache = cfg;
+      const st = cfg.strategy || {};
+      const nt = cfg.notify || {};
+      els.settingsContent.innerHTML = `
+        <div class="set-card">
+          <div class="set-card-title">策略参数（百分之四定投法）</div>
+          <div class="set-row"><span>折损系数</span><b>跌 ${st.dropPct ?? 4}% 触发加仓</b></div>
+          <div class="set-row"><span>加仓倍数</span><b>${st.addMult ?? 1.8} ×</b></div>
+          <div class="set-row"><span>层级上限</span><b>${st.maxLevel ?? 10} 笔</b></div>
+          <div class="set-row"><span>浮亏锁线</span><b>≈ ${st.lossLimit ?? 4.76}%</b></div>
+          <div class="set-row"><span>基准加仓序列</span><b class="mono" style="font-size:11px">${htmlEscape(st.baseSeq || "")}</b></div>
+          <div class="set-mini">序列随每只基金的首投金额等比缩放；理想剧本下浮亏锁线 ≈ 4.76%，任意层反弹 5% 即回本。</div>
+        </div>
+        <div class="set-card">
+          <div class="set-card-title">通知（Zoho 邮件 · 可选）</div>
+          <div class="set-mini" style="margin-top:0;margin-bottom:10px">Webhook${nt.configured ? "（已配置）" : "（未配置，不推送）"}：配置后打开页面检测到新加仓/止盈信号时自动推邮件。</div>
+          <input class="set-input" id="zohoWebhookUrl" type="url" placeholder="https://zohomailwh.com/integPlatform/..." value="${htmlEscape(nt.masked || "")}">
+          <div class="set-btn-row">
+            <button class="set-btn" id="btnSaveNotify">保存</button>
+            <button class="set-btn ghost" id="btnTestNotify">发测试邮件</button>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="set-card-title">数据备份</div>
+          <div class="set-row"><span>数据存储位置</span><b style="font-size:11px">Cloudflare KV（云端）</b></div>
+          <div class="set-mini">免费额度不保证数据安全，请定期导出备份 JSON。</div>
+          <div class="set-btn-row">
+            <button class="set-btn" id="btnSettingsExport">导出备份</button>
+            <button class="set-btn ghost" id="btnSettingsImport">导入恢复</button>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="set-card-title">AI 分析接口</div>
+          <div class="set-mini" style="margin-top:0">把全部实盘数据 + 内置提示词喂给任意大模型，获取每只基金的短期/长期止盈建议：</div>
+          <div class="set-url mono">${location.origin}/api/llm-context?format=text</div>
+          <div class="set-btn-row">
+            <button class="set-btn" id="btnCopyLlm">复制提示词+数据</button>
+            <button class="set-btn ghost" id="btnOpenLlm">打开文本</button>
+          </div>
+        </div>
+        <div class="set-disclaimer">本工具仅为个人计算辅助，不构成投资建议。<br>市场有风险，投资需谨慎。百分之四定投法的亏损锁定为数学演算，不保证收益。</div>`;
+      $("btnSaveNotify").addEventListener("click", saveNotify);
+      $("btnTestNotify").addEventListener("click", testNotify);
+      $("btnSettingsExport").addEventListener("click", exportData);
+      $("btnSettingsImport").addEventListener("click", () => els.importInput.click());
+      $("btnCopyLlm").addEventListener("click", copyLlm);
+      $("btnOpenLlm").addEventListener("click", () => window.open("/api/llm-context?format=text", "_blank"));
+    }
+
+    async function saveNotify() {
+      const input = document.getElementById("zohoWebhookUrl");
+      const value = (input.value || "").trim();
+      const masked = (settingsCache.notify && settingsCache.notify.masked) || "";
+      try {
+        const body = {};
+        if (!value) body.zohoWebhookUrl = "";                    // 清空配置
+        else if (value !== masked) body.zohoWebhookUrl = value;  // 未改动（仍为脱敏值）时不提交，保持原配置
+        const res = await api("/api/settings", { method: "POST", body });
+        showToast(res.configured ? "已保存（通知启用）" : "已保存（通知停用）");
+        renderSettings();
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function testNotify() {
+      try {
+        const res = await api("/api/notify/test", { method: "POST", body: {} });
+        showToast(res.msg || "测试邮件已发送");
+      } catch (err) {
+        showToast(err.message);
+      }
+    }
+
+    async function copyLlm() {
+      try {
+        const res = await fetch("/api/llm-context?format=text", { credentials: "same-origin" });
+        const text = await res.text();
+        await navigator.clipboard.writeText(text);
+        showToast("已复制，粘贴给任意大模型即可");
+      } catch (err) {
+        showToast("复制失败，请用「打开文本」手动复制");
+      }
+    }
+
     /* ----- 账号安全：修改密码 / 退出登录 ----- */
     function openSecurityModal() {
       els.oldPwd.value = "";
@@ -2451,6 +2891,9 @@
       els.btnConfirmChangePwd.addEventListener("click", confirmChangePwd);
       els.btnLogout.addEventListener("click", logout);
       els.newPwd2.addEventListener("keydown", (e) => { if (e.key === "Enter") confirmChangePwd(); });
+
+      els.btnSettings.addEventListener("click", showSettings);
+      els.btnSettingsBack.addEventListener("click", showHome);
 
       els.stopBannerClose.addEventListener("click", () => {
         stopBannerDismissedCount = stopBannerHits.length;
