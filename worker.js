@@ -5,6 +5,7 @@
 
 const KV_KEY = "store";
 const SETTINGS_KEY = "settings";
+const CRON_LAST_KEY = "cron:last"; // 定时任务最近一次执行结果（官方无失败告警，自行留痕自查）
 
 /* ---------------- 策略参数（与 PHP 版默认值一致） ----------------
    LOSS_COEF  折损系数：净值跌到上一笔的 96% 触发下一笔买入
@@ -1159,6 +1160,56 @@ async function handle(path, method, url, request, env, ctx) {
   return json({ success: false, message: "接口不存在" }, 404);
 }
 
+/* ---------------- 定时任务：净值刷新 + 信号推送 ----------------
+   遍历全部账户（不只是当前账户），逐只刷新净值；单只失败不影响其他。
+   刷新后按当前加仓模式对全账户做信号检测并推送（同一基金代码跨账户只算一次）。 */
+async function runScheduledRefresh(env) {
+  const store = await loadStore(env);
+  const settings = await loadSettings(env);
+  const mode = normalizeAddMode(settings.addMode);
+  let total = 0;
+  let ok = 0;
+  let fail = 0;
+  const errors = [];
+  for (const acc of store.accounts || []) {
+    for (const fund of store.fundsByAccount[acc.name] || []) {
+      total++;
+      try {
+        const fd = await fetchFundData(fund.code);
+        if (fd && fd.success) {
+          fund.name = fd.name;
+          fund.currentPrice = fd.dwjz;
+          fund.jzrq = fd.jzrq;
+          ok++;
+        } else {
+          fail++;
+          errors.push(`${fund.code} ${(fd && fd.message) || "拉取失败"}`);
+        }
+      } catch (e) {
+        fail++;
+        errors.push(`${fund.code} ${e && e.message ? e.message : String(e)}`);
+      }
+    }
+  }
+  await saveStore(env, store);
+  /* 信号检测：按基金代码去重，避免同一代码跨账户重复推送 */
+  const seen = {};
+  const all = [];
+  for (const acc of store.accounts || []) {
+    for (const fund of store.fundsByAccount[acc.name] || []) {
+      if (seen[fund.code]) continue;
+      seen[fund.code] = 1;
+      all.push(enrichFund(fund, mode));
+    }
+  }
+  try {
+    await maybeNotifySignals(env, store, all);
+  } catch (e) {
+    errors.push(`信号推送异常：${e && e.message ? e.message : String(e)}`);
+  }
+  return { total, ok, fail, errors };
+}
+
 /* ---------------- 入口 ---------------- */
 export default {
   async fetch(request, env, ctx) {
@@ -1199,5 +1250,34 @@ export default {
     }
     // 静态前端（同源，无需 CORS）
     return env.ASSETS.fetch(request);
+  },
+
+  /* ---------------- 定时任务（Cron Trigger，见 wrangler.toml [triggers]） ----------------
+     每个工作日 20:00（北京，即 12:00 UTC）自动刷新全部账户的基金净值，刷新后按当前
+     加仓模式检测信号并推送（已推送信号留痕去重，同一信号只推一次）。
+     设计要点：
+     - 官方未承诺 Cron 失败重试（runtime 有 controller.noRetry()，但重试策略无文档），
+       故按「失败即丢失、下个周期补」设计：逐只基金隔离错误，净值写入本身幂等，重跑无副作用；
+     - 结果留痕到 KV "cron:last"，配合 `wrangler tail` / Workers Logs 自查；
+     - 不主动抛出异常——抛出只会让本次运行被丢弃，异常已记录到日志与 KV。 */
+  async scheduled(controller, env, ctx) {
+    const cron = (controller && controller.cron) || "(未指定)";
+    const at = nowIso();
+    try {
+      const r = await runScheduledRefresh(env);
+      const tail = r.errors.length ? "：" + r.errors.join("；") : "";
+      console.log(`[cron ${cron}] 净值刷新 ${r.ok}/${r.total} 成功，${r.fail} 失败${tail}`);
+      try {
+        await env.STORE.put(CRON_LAST_KEY, JSON.stringify({
+          at, cron, outcome: "ok", total: r.total, ok: r.ok, fail: r.fail, errors: r.errors.slice(0, 10),
+        }));
+      } catch { /* 留痕失败不影响主流程 */ }
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      console.error(`[cron ${cron}] 执行失败：${msg}`);
+      try {
+        await env.STORE.put(CRON_LAST_KEY, JSON.stringify({ at, cron, outcome: "error", error: msg }));
+      } catch { /* 留痕失败不影响主流程 */ }
+    }
   },
 };

@@ -33,7 +33,7 @@
 - **回本测算卡**：输入实际成交价，实时反推「从该价买入多少，才能涨 5% 回本」，支持偏离场景的金额决策
 - **真实持仓口径**：回本价 = 总成本 ÷ 总份额（非经验法则的「最新价 × 1.05」），支持部分减仓后的剩余持仓
 - **多账户隔离**：一个密码下可建多个账户（如「主力 / 实验」），数据互不可见
-- **每日净值刷新**：对接东方财富公开接口，支持单只 / 全部刷新，净值日期按北京时间归属
+- **每日净值刷新**：对接东方财富公开接口，支持手动单只 / 全部刷新，并内置定时任务每工作日 20:00（北京）自动刷新全部账户；净值日期按北京时间归属
 - **数据自主**：JSON 导入 / 导出（含全量账户），数据永远属于你自己
 - **信号邮件推送**：配置 Webhook 后，新加仓 / 止盈信号自动推送（异步、失败静默，不阻塞页面）
 - **LLM 上下文导出**：`/api/llm-context` 一键导出当前持仓与信号的文本快照，方便让 AI 帮你解读
@@ -47,7 +47,7 @@
 浏览器（public/index.html，vanilla JS SPA）
    │  同域请求 /api/*
    ▼
-Cloudflare Worker（worker.js）
+Cloudflare Worker（worker.js）  ◄── Cron Trigger（工作日 20:00 北京 = 12:00 UTC，自动刷新净值 + 推送信号）
    ├── 门禁：会话 Cookie（dt_session，7 天有效，SHA-256 令牌）
    ├── API：/api/state · /api/funds · /api/records · /api/reductions · /api/settings …
    ├── 计算：信号引擎 / 阶梯表 / 回本精算（纯函数，与前端公式一致）
@@ -69,10 +69,10 @@ Cloudflare Worker（worker.js）
 
 ```
 bfzsdt/
-├── worker.js            # 后端 + 静态托管 + KV 读写（单文件，1211 行）
+├── worker.js            # 后端 + 静态托管 + KV 读写 + 定时任务（单文件，1283 行）
 ├── public/
 │   └── index.html       # 前端 SPA（结构 + 样式 + 逻辑，单文件）
-├── wrangler.toml        # Workers 配置（Worker 名 / KV 绑定 / 静态资源）
+├── wrangler.toml        # Workers 配置（Worker 名 / KV 绑定 / 静态资源 / 定时任务 cron）
 ├── .gitignore           # 忽略 data/、.wrangler/、备份包、AI 工作记忆等
 └── README.md
 ```
@@ -172,6 +172,39 @@ npx wrangler dev          # 本地起服务（默认 http://localhost:8787）
 - 设置页「导出数据」下载 JSON（含全部账户）；「导入数据」支持单账户 / 全量两种格式；
 - **建议定期导出备份**：KV 中的数据仅存于 Cloudflare，本地留一份最稳妥。
 
+### 定时任务（自动刷新净值）
+
+已内置 Cron Trigger：每个工作日 **20:00（北京）** 自动刷新全部账户的基金净值，刷新后按当前加仓模式检测信号并推送邮件。
+
+- 配置在 `wrangler.toml`：`[triggers] crons = ["0 12 * * MON-FRI"]`
+- **Cron 一律按 UTC 执行，无时区配置项**：北京 = UTC+8，故 20:00 北京 = 12:00 UTC
+- **周几编号是 1=周日…7=周六**（与常见 0=周日 不同），因此用 `MON-FRI` 缩写而非数字，避免歧义
+- 想更频繁跟进可改为 `*/30 * * * *`（每 30 分钟），注意会消耗更多请求数与 CPU 配额
+- 改动 cron 后需**最多 15 分钟**才在全网生效；`wrangler deploy` 会用配置里的数组整体替换线上已有的 cron
+
+**行为与可靠性设计**：
+- 遍历**全部账户**（不只是当前账户），逐只刷新；单只基金拉取失败只记错误，不影响其他基金
+- 同一基金代码跨账户只推送一次；信号按「状态 + 净值日期」去重，重跑不会产生重复推送
+- 官方未承诺 Cron 失败重试（`controller.noRetry()` 存在但重试策略无文档），故按「失败即丢失、下个周期补」设计：任务自身幂等，异常内部兜底并记录，不向外抛出
+- 每次执行结果写入 KV 键 `cron:last`，便于自查（官方无失败告警）
+
+**本地测试**：
+
+```bash
+npx wrangler dev --test-scheduled
+curl "http://localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*&format=json"
+# 返回 {"outcome":"ok","noRetry":false}
+```
+
+**线上排查**：
+
+```bash
+npx wrangler tail dingtou-worker --format pretty        # 实时日志
+npx wrangler kv key get --binding=STORE cron:last       # 最近一次执行结果
+```
+
+也可在 Cloudflare 面板 → 该 Worker → Settings → Trigger Events → View events 查看最近 100 次调用。
+
 ### 信号邮件推送
 
 设置页填入 Webhook 地址（Zoho Mail webhook，`http(s)://` 开头），保存后可发一封测试邮件验证。配置后，每次打开首页检测到**新的**加仓 / 止盈信号即自动推送（异步执行、失败静默，不影响页面）；同一信号（按「信号类型 + 净值日期」去重）只推一次，不会反复轰炸。接口契约：POST JSON（`subject` / `content` / `summary` / `message`），成功判据为 HTTP 200 且响应体含 `"code":200`。
@@ -238,7 +271,8 @@ STORE（KV namespace）
 │               #          stopProfitTarget, remark }
 ├── settings    # { addMode: "ideal" | "actual", zohoWebhookUrl: string }
 ├── auth:pwd    # 密码哈希（SHA-256 直算，无盐；个人自用工具，勿存敏感密码）
-└── auth:sess:*    # 会话令牌，TTL 7 天
+├── auth:sess:*    # 会话令牌，TTL 7 天
+└── cron:last  # 定时任务最近一次执行结果（at/cron/outcome/total/ok/fail/errors）
 ```
 
 ## 十、安全说明
