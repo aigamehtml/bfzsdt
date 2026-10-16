@@ -10,7 +10,7 @@ const SETTINGS_KEY = "settings";
    LOSS_COEF  折损系数：净值跌到上一笔的 96% 触发下一笔买入
    ADD_MULT   理想剧本亏损锁线公式的分母参数（limit = (1-LOSS)/(ADD_MULT-LOSS)）
    MAX_LEVEL  单轮层级上限（10 笔）
-   BASE_SEQ   基准加仓序列（首投 ¥10 口径），按每只基金首投金额等比缩放 */
+   BASE_SEQ   基准加仓序列（原始 10 档固定，不按首投金额缩放；2026-10-16 应用户要求移除等比缩放） */
 const LOSS_COEF = 0.96;
 const ADD_MULT = 1.8;
 const MAX_LEVEL = 10;
@@ -135,20 +135,12 @@ function currentFunds(store) {
 }
 
 /* ---------------- 定投策略计算（4% / 10 份） ---------------- */
-/* 加仓序列：基准 BASE_SEQ 按该基金首投金额 / 10 等比缩放（与 PHP add_seq 同规则） */
-function addSeq(fund) {
-  const records = fund.records || [];
-  const initial = records.length ? toFloat(records[0].amount) : 10;
-  const factor = (initial > 0 ? initial : 10) / 10;
-  return BASE_SEQ.map((x) => Math.round(x * factor * 100) / 100);
-}
-
-/* 第 count 笔（0 起）的建议金额；超过序列长度取最后一档 */
+/* 第 count 笔（0 起）的建议金额；理想表 = 原始 BASE_SEQ（10 档固定，不随首投金额缩放）。
+   2026-10-16 移除「按首投金额 / 10 等比缩放」——理想定投表保持原始序列。 */
 function getNextBuyAmountFor(fund, count) {
-  const seq = addSeq(fund);
   if (count < 0) count = 0;
-  if (count >= seq.length) return seq[seq.length - 1];
-  return seq[count];
+  if (count >= BASE_SEQ.length) return BASE_SEQ[BASE_SEQ.length - 1];
+  return BASE_SEQ[count];
 }
 
 /* 新基金首档建议金额（首投口径 ¥10，无缩放） */
@@ -163,7 +155,7 @@ function idealTrack(fund) {
   const p0 = records.length ? toFloat(records[0].price)
     : (toFloat(fund.currentPrice) > 0 ? toFloat(fund.currentPrice) : null);
   if (p0 === null || p0 <= 0) return null;
-  const seq = addSeq(fund);
+  const seq = BASE_SEQ;
   const rows = [];
   let cost = 0;
   let mv = 0;
