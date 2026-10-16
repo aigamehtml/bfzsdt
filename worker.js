@@ -35,6 +35,11 @@ function todayStr() {
 function nowIso() {
   return new Date().toISOString();
 }
+/* 买入份额截断到 2 位小数：不四舍五入，直接舍弃（与 PHP 版 shares_floor2 同规则）。
+   +1e-9 用于消除二进制浮点噪声（如 1.15*100 = 114.99999999999999），不改变截断语义。 */
+function sharesFloor2(v) {
+  return Math.floor(v * 100 + 1e-9) / 100;
+}
 function toFloat(v, def = 0.0) {
   try {
     if (v === null || v === undefined || v === "") return def;
@@ -202,10 +207,16 @@ function getFirstBuyChange(fund) {
   if (firstPrice <= 0) return 0;
   return ((currentPrice - firstPrice) / firstPrice) * 100;
 }
+/* 信号与首页排序规则（sortKey 三元素：[组号, 0, 组内排序值]，cmpKey 逐元素升序）：
+   组 0 触发止盈（最上，组内收益率高的在前）
+   组 1 触发买入（组内超跌幅度大的在前，跌得越深越紧急）
+   组 2 正常持有 = 补仓需跌 + 底部反弹（组内按 gap 升序：
+        gap = 当前净值距下次买入目标价还有百分之几，越小＝离触发买入越近，排越前）
+   组 3 沉底（未记录初始价 / 请同步数据） */
 function signalFor(fund) {
   const records = fund.records || [];
   if (!records.length) {
-    return { label: "未记录初始价", level: "gray", sortKey: [2, 0, 999] };
+    return { label: "未记录初始价", level: "gray", sortKey: [3, 0, 999] };
   }
   const profit = calculateProfit(fund);
   const stopTarget = toFloat(fund.stopProfitTarget, 20);
@@ -213,12 +224,12 @@ function signalFor(fund) {
     return {
       label: `触发止盈 (收益${profit.profitPercent.toFixed(2)}%)`,
       level: "red",
-      sortKey: [3, 0, -profit.profitPercent],
+      sortKey: [0, 0, -profit.profitPercent],
     };
   }
   const currentPrice = toFloat(fund.currentPrice);
   if (currentPrice <= 0) {
-    return { label: "请同步数据", level: "gray", sortKey: [2, 0, 999] };
+    return { label: "请同步数据", level: "gray", sortKey: [3, 0, 999] };
   }
   const lastPrice = toFloat(records[records.length - 1].price);
   const nextPrice = lastPrice * 0.96;
@@ -227,15 +238,15 @@ function signalFor(fund) {
     return {
       label: `触发买入 (超跌${Math.abs(gap).toFixed(2)}%)`,
       level: "green",
-      sortKey: [0, 0, -Math.abs(gap)],
+      sortKey: [1, 0, -Math.abs(gap)],
     };
   }
   if (currentPrice > lastPrice) {
     const rebound = ((currentPrice - lastPrice) / lastPrice) * 100;
     const tagLevel = profit.profit < 0 ? "green" : "orange";
-    return { label: `底部反弹 ${rebound.toFixed(2)}%`, level: "orange", tagLevel, sortKey: [2, 0, rebound] };
+    return { label: `底部反弹 ${rebound.toFixed(2)}%`, level: "orange", tagLevel, sortKey: [2, 0, gap] };
   }
-  return { label: `补仓需跌 ${gap.toFixed(2)}%`, level: "gray", sortKey: [1, 0, gap] };
+  return { label: `补仓需跌 ${gap.toFixed(2)}%`, level: "gray", sortKey: [2, 0, gap] };
 }
 function enrichFund(fund) {
   const out = { ...fund };
@@ -255,8 +266,8 @@ function enrichFund(fund) {
   };
 }
 function cmpKey(x, y) {
-  x = x || [2, 0, 999];
-  y = y || [2, 0, 999];
+  x = x || [3, 0, 999];
+  y = y || [3, 0, 999];
   for (let i = 0; i < x.length; i++) {
     if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
   }
@@ -309,11 +320,14 @@ async function fetchFundData(code) {
 function normalizeRecord(data) {
   const price = toFloat(data.price);
   if (price <= 0) throw new Error("请输入有效价格");
+  const amount = toFloat(data.amount);
+  if (amount < 1) throw new Error("买入金额至少 1 元");
+  /* 份额以服务端计算为准（金额 ÷ 净值），截断到 2 位小数，不采信前端传值 */
   return {
     buyTime: data.buyTime || todayStr(),
     price,
-    amount: toFloat(data.amount),
-    shares: toFloat(data.shares),
+    amount,
+    shares: sharesFloor2(amount / price),
   };
 }
 function findFund(store, code) {
