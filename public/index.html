@@ -431,7 +431,7 @@
 
     .fund-body {
       display: grid;
-      grid-template-columns: 1fr 1fr auto;
+      grid-template-columns: 1fr auto;
       gap: 8px;
       align-items: center;
     }
@@ -442,11 +442,18 @@
       font-family: ui-monospace, monospace;
     }
 
-    .fund-target {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--primary);
-      text-align: center;
+    .fund-next {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    .fund-next b {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--primary-dark);
     }
 
     .fund-tag {
@@ -1591,12 +1598,6 @@
     }
 
     @media (max-width: 380px) {
-      .fund-body {
-        grid-template-columns: 1fr auto;
-      }
-      .fund-target {
-        display: none;
-      }
       .metric-value {
         font-size: 18px;
       }
@@ -2099,6 +2100,24 @@
         const layer = st.level || 0;
         const triggerHtml = (st.triggerNav !== null && st.triggerNav !== undefined && layer > 0)
           ? `<span class="fund-trigger">触发 ${price(st.triggerNav)}</span>` : "";
+        /* 下一笔金额行（PHP 式独立行：移动端也可见；金额随加仓模式精算） */
+        const nextAmt = st.nextAmount;
+        const nextBase = st.baseAmount;
+        let nextHtml = "";
+        if (signal.state === "init") {
+          nextHtml = `<div class="fund-next">首笔 <b class="mono">${money(nextAmt === null || nextAmt === undefined ? 10 : nextAmt)}</b> 元 · 点开详情记第一笔</div>`;
+        } else if (signal.state === "resting") {
+          nextHtml = `<div class="fund-next">本轮已止盈离场 · 清空买入记录后重新建仓</div>`;
+        } else if (signal.state === "exhausted") {
+          nextHtml = `<div class="fund-next">10 笔已投满 · 持有等待止盈反弹</div>`;
+        } else if (signal.state === "take_profit") {
+          nextHtml = `<div class="fund-next">建议止盈离场 · 记一笔卖出结算</div>`;
+        } else if (signal.state === "stale") {
+          nextHtml = `<div class="fund-next">净值数据异常 · 点「刷新数据」重试</div>`;
+        } else if (nextAmt !== null && nextAmt !== undefined) {
+          const corrTag = (state.addMode === "actual" && nextBase !== null && nextBase !== undefined && nextAmt > nextBase) ? "（回本精算）" : "";
+          nextHtml = `<div class="fund-next">下一笔 <b class="mono">${money(nextAmt)}</b> 元${corrTag}（第 ${layer + 1} 笔）</div>`;
+        }
         return `
             <article class="fund-card level-${level}" data-code="${htmlEscape(fund.code)}">
               <div class="fund-card-head">
@@ -2110,13 +2129,13 @@
               </div>
               <div class="fund-body">
                 <span class="fund-price mono">${price(fund.currentPrice)}</span>
-                <span class="fund-target mono">${htmlEscape(fund.summary.nextTarget.text)}</span>
                 <span class="fund-tag ${signalClass(tagLevel)}">${htmlEscape(signal.label)}</span>
               </div>
               <div class="fund-meta-row">
                 <span class="fund-layer">第 ${layer} 层 / 10</span>
                 ${triggerHtml}
               </div>
+              ${nextHtml}
               ${fund.remark ? `<div class="fund-remark">📝 ${htmlEscape(fund.remark)}</div>` : ""}
             </article>`;
       }).join("");
