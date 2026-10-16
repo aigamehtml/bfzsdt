@@ -701,7 +701,7 @@
       color: var(--primary-dark);
     }
     /* ============================================================
-       5% 回本测算卡（实际口径 + 双模式触发价对比）
+       5% 回本测算卡（实际回本价 + 成交价输入精算修正买入金额）
        ============================================================ */
     .be-grid {
       display: grid;
@@ -724,43 +724,60 @@
       font-size: 16px;
       font-weight: 800;
     }
-    .be-modes {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-top: 10px;
-    }
-    .be-mode {
+    .be-calc {
+      margin-top: 12px;
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 10px 12px;
+      padding: 12px 14px;
     }
-    .be-mode.cur {
-      border-color: var(--primary);
-      background: var(--primary-light);
+    .be-calc-head {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
     }
-    .be-mode-head {
+    .be-calc-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--text-secondary);
-      font-weight: 700;
-      margin-bottom: 6px;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 13px;
     }
-    .be-cur-tag {
-      font-size: 10px;
-      font-weight: 800;
-      color: var(--primary-dark);
-      background: #fff;
-      border-radius: 999px;
-      padding: 2px 8px;
+    .be-calc-row + .be-calc-row {
+      border-top: 1px dashed var(--border);
+    }
+    .be-calc-label {
+      color: var(--text-secondary);
+      font-weight: 600;
       flex-shrink: 0;
     }
-    .be-mode-val {
-      font-size: 15px;
+    .be-calc-row b {
       font-weight: 800;
+    }
+    .be-input {
+      width: 130px;
+      flex-shrink: 0;
+      padding: 8px 10px;
+      text-align: right;
+      font-size: 13px;
+    }
+    .be-result {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--primary-dark);
+    }
+    .be-result.hot {
+      color: #dc2626;
+    }
+    .be-hint {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      line-height: 1.6;
+      margin-top: 8px;
+    }
+    .be-hint b {
+      color: #dc2626;
     }
     .set-input {
       width: 100%;
@@ -2252,7 +2269,8 @@
       const sigCls = signalClass(signal.level, "signal");
       let sigDesc = "";
       if (signal.state === "add") {
-        sigDesc = `买 <b>${money(st.nextAmount)}</b> 元（第 ${st.level + 1} 笔）｜ 触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b> ✓ 已跌破触发`;
+        const amtTag = (state.addMode === "actual" && st.nextAmount !== st.baseAmount) ? "（回本精算）" : "";
+        sigDesc = `买 <b>${money(st.nextAmount)}</b> 元${amtTag}（第 ${st.level + 1} 笔）｜ 触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b> ✓ 已跌破触发`;
       } else if (signal.state === "take_profit") {
         sigDesc = `市值 <b>${money(st.marketValue)}</b> 元 ≥ 目标 <b>${money(st.tpTargetMV)}</b> 元 ｜ 收益率 <b>${Number(st.returnRate || 0) >= 0 ? "+" : ""}${Number(st.returnRate || 0).toFixed(2)}%</b> ｜ 可记一笔卖出落袋`;
       } else if (signal.state === "exhausted") {
@@ -2310,18 +2328,15 @@
             <div class="ideal-sub">待建仓后生成（录入第一笔买入后展示理想剧本）</div>
           </div>`;
       }
-      /* 5% 回本测算卡：实际回本价/距回本涨幅 + 双模式触发价对比（当前模式高亮） */
+      /* 5% 回本测算卡：实际回本价/距回本 + 成交价输入实时精算「修正买入金额」 */
       const be = st.breakeven || null;
-      const beIdealTrigger = (st.refNav && st.refNav > 0) ? Math.round(st.refNav * 0.96 * 10000) / 10000 : null;
-      const beActualRaw = (st.actualCost && st.actualShares && st.nextAmount)
-        ? (st.actualCost - 0.05 * st.nextAmount) / (1.05 * st.actualShares) : null;
-      const beActualTrigger = (beActualRaw !== null && beActualRaw > 0) ? Math.round(beActualRaw * 10000) / 10000 : null;
+      const beBase = (st.baseAmount === null || st.baseAmount === undefined) ? null : st.baseAmount;
       let beHtml = "";
-      if (be) {
+      if (be && beBase !== null) {
         const gapTxt = (be.gapPct === null || be.gapPct === undefined) ? "--"
           : (be.gapPct >= 0 ? `还差 ${be.gapPct.toFixed(2)}%` : `已回本 ${Math.abs(be.gapPct).toFixed(2)}%`);
         const gapCls = (be.gapPct !== null && be.gapPct !== undefined && be.gapPct < 0) ? "text-red" : "text-green";
-        const mode = state.addMode === "actual" ? "actual" : "ideal";
+        const defRef = (st.reboundRef && st.reboundRef > 0) ? st.reboundRef : "";
         beHtml = `
           <div class="detail-card">
             <div class="ideal-title">5% 回本测算</div>
@@ -2336,17 +2351,43 @@
                 <div class="be-value mono ${gapCls}">${gapTxt}</div>
               </div>
             </div>
-            <div class="be-modes">
-              <div class="be-mode ${mode === "ideal" ? "cur" : ""}">
-                <div class="be-mode-head"><span>理想阶梯触发价</span>${mode === "ideal" ? '<span class="be-cur-tag">← 当前</span>' : ""}</div>
-                <div class="be-mode-val mono">${beIdealTrigger ? price(beIdealTrigger) : "--"}</div>
+            <div class="be-calc">
+              <div class="be-calc-head">下一笔加仓精算（第 ${st.level + 1} 笔 ｜ 触发价 ${price(st.triggerNav)}）</div>
+              <div class="be-calc-row">
+                <span class="be-calc-label">表内金额</span>
+                <b class="mono">${money(beBase)} 元</b>
               </div>
-              <div class="be-mode ${mode === "actual" ? "cur" : ""}">
-                <div class="be-mode-head"><span>实际 5% 回本触发价</span>${mode === "actual" ? '<span class="be-cur-tag">← 当前</span>' : ""}</div>
-                <div class="be-mode-val mono">${beActualTrigger ? price(beActualTrigger) : "无解 · 已回退"}</div>
+              <div class="be-calc-row">
+                <span class="be-calc-label">实际成交价</span>
+                <input class="set-input be-input" id="bePriceInput" type="number" step="0.0001" min="0" inputmode="decimal" value="${defRef}" placeholder="填入实付净值">
+              </div>
+              <div class="be-calc-row">
+                <span class="be-calc-label">修正买入金额</span>
+                <b class="mono be-result" id="beResult">--</b>
+              </div>
+              <div class="be-hint" id="beHint">输入实际成交价，实时精算该买多少</div>
+            </div>
+            <div class="set-mini" style="margin:10px 0 0;">公式：修正金额 =（成本 − 1.05 × 成交价 × 持仓份额）÷ 0.05，令「买入后从成交价涨 5% 恰好回本」；与表内金额取大——成交价偏离阶梯价越深，加码越多；无需修正时按表内金额买入。当前模式：<b>${state.addMode === "actual" ? "实际 5% 回本" : "理想阶梯"}</b>（设置页切换；actual 模式下信号盒与首页直接展示精算金额）。</div>
+          </div>`;
+      } else if (be) {
+        const gapTxt = (be.gapPct === null || be.gapPct === undefined) ? "--"
+          : (be.gapPct >= 0 ? `还差 ${be.gapPct.toFixed(2)}%` : `已回本 ${Math.abs(be.gapPct).toFixed(2)}%`);
+        const gapCls = (be.gapPct !== null && be.gapPct !== undefined && be.gapPct < 0) ? "text-red" : "text-green";
+        beHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">5% 回本测算</div>
+            <div class="ideal-sub">实际口径 · 按真实持仓成本 ÷ 份额计算，与加仓模式无关</div>
+            <div class="be-grid">
+              <div class="be-item">
+                <div class="be-label">实际回本价</div>
+                <div class="be-value mono">${price(be.price)}</div>
+              </div>
+              <div class="be-item">
+                <div class="be-label">现价距回本</div>
+                <div class="be-value mono ${gapCls}">${gapTxt}</div>
               </div>
             </div>
-            <div class="set-mini" style="margin:10px 0 0;">实际触发价公式：(成本 − 5% × 下一笔金额) ÷ (1.05 × 持仓份额)，令「以该价买入后涨 5% 恰好回本」；无解（已接近回本）时自动回退理想阶梯价。下一笔买入口径可在设置页切换。</div>
+            <div class="be-calc"><div class="be-calc-head">10 笔已全部投满，无下一笔加仓</div></div>
           </div>`;
       } else if (records.length) {
         beHtml = `
@@ -2449,6 +2490,30 @@ ${beHtml}
             <div class="records-title">减仓记录</div>
             ${reductionsHtml}
           </div>`;
+      /* 回本测算卡：成交价输入 → 实时精算修正买入金额（前端本地计算，不请求后端） */
+      const beInput = document.getElementById("bePriceInput");
+      if (beInput) {
+        const beCost = st.actualCost, beShares = st.actualShares, beBaseAmt = beBase;
+        const calcBe = () => {
+          const out = document.getElementById("beResult");
+          const hint = document.getElementById("beHint");
+          const P = parseFloat(beInput.value);
+          if (!out) return;
+          if (!(P > 0)) { out.textContent = "--"; out.classList.remove("hot"); if (hint) hint.textContent = "请输入有效成交价"; return; }
+          const x = (beCost - 1.05 * P * beShares) / 0.05;
+          const z = x > beBaseAmt ? Math.round(x * 100) / 100 : beBaseAmt;
+          out.textContent = `${money(z)} 元`;
+          if (x > beBaseAmt) {
+            out.classList.add("hot");
+            if (hint) hint.innerHTML = `需加码 <b>${money(Math.round((x - beBaseAmt) * 100) / 100)}</b> 元：按表内 ${money(beBaseAmt)} 元买入，从 ${P} 涨 5% 回不了本`;
+          } else {
+            out.classList.remove("hot");
+            if (hint) hint.textContent = "表内金额已足够：按此金额买入，从成交价涨 5% 即可回本";
+          }
+        };
+        beInput.addEventListener("input", calcBe);
+        calcBe();
+      }
     }
 
     /* ----- 底部抽屉式弹窗 ----- */
@@ -2804,7 +2869,7 @@ ${beHtml}
               <button class="mode-btn ${addMode === "actual" ? "active" : ""}" data-mode="actual">实际5%回本</button>
             </div>
           </div>
-          <div class="set-mini"><b>理想阶梯</b>：下一笔触发价 = 上一笔成交净值 × 0.96（严格 -4% 阶梯，理论上浮亏锁死 4.76%）。<br><b>实际5%回本</b>：按真实持仓成本 ÷ 份额反推买入价，令「买完后从买入价涨 5% 恰好回本」——现实中成交价不在 -4% 上时更准。模式切换即时生效，首页排序与信号同步刷新。</div>
+          <div class="set-mini"><b>理想阶梯</b>：下一笔触发价 = 上一笔成交净值 × 0.96，买入金额按表内序列（严格 -4% 阶梯，理论上浮亏锁死 4.76%）。<br><b>实际5%回本</b>：触发价不变，买入金额按「成交后从成交价涨 5% 恰好回本」精算（默认参考当前净值，与表内金额取大）——成交价偏离阶梯价越深，加码越多。详情页「5% 回本测算」卡可输入实际成交价实时试算。模式切换即时生效，首页排序与信号同步刷新。</div>
         </div>
         <div class="set-card">
           <div class="set-card-title">通知（Zoho 邮件 · 可选）</div>

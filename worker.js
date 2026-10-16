@@ -193,7 +193,7 @@ function idealTrack(fund) {
     limit: Math.round((1 - LOSS_COEF) / (ADD_MULT - LOSS_COEF) * 10000) / 100,
   };
 }
-/* ---------------- 实际回本计算（非理想剧本，按真实持仓实算） ----------------
+/* 实际回本计算（非理想剧本，按真实持仓实算）。
    经验法则「最新买入价 × 1.05 回本」只在理想剧本中后段成立（第 4 层起），
    现实中成交价不在严格 -4% 上，唯一准确的口径是平均成本：回本价 = 成本 ÷ 份额。 */
 function breakevenInfo(fund) {
@@ -209,30 +209,42 @@ function breakevenInfo(fund) {
     gapPct: gapPct === null ? null : Math.round(gapPct * 100) / 100,
   };
 }
-/* 实际模式下一笔买入价：令「以 P 买入 amount 后，从 P 上涨 5% 恰好回本」。
-   推导：(cost+amount)/(shares+amount/P) = 1.05P
-      ⟹ cost+amount = 1.05·P·shares + 1.05·amount
-      ⟹ P = (cost - 0.05·amount) / (1.05·shares)
-   无解（首笔前 / 金额过大使分子≤0）时返回 null，由调用方回退理想阶梯。 */
-function actualNextPrice(fund, amount) {
+/* 实际模式下一笔买入金额：成交价不可预知（触发价只是信号线，实付价必然偏离），
+   若仍按表内固定金额买入，从实付价涨 5% 回不了本。令「以价格 P 买入金额 X 后，
+   从 P 上涨 5% 恰好回本」反推金额：
+     (cost + X) / (shares + X/P) = 1.05·P
+     ⟹ cost + X = 1.05·P·shares + 1.05·X
+     ⟹ X = (cost − 1.05·P·shares) / 0.05
+   X ≤ 0 表示当前持仓已满足「涨 5% 回本」，无需修正（返回 null，按表内金额即可）。 */
+function actualBuyAmount(fund, price) {
   const profit = calculateProfit(fund);
   const cost = profit.totalCost;
   const shares = profit.totalShares;
-  if (cost <= 0 || shares <= 0 || !(amount > 0)) return null;
-  const p = (cost - REBOUND_GAP * amount) / (REBOUND_COEF * shares);
-  if (!(p > 0)) return null;
-  return Math.round(p * 10000) / 10000;
+  const p = toFloat(price);
+  if (cost <= 0 || shares <= 0 || !(p > 0)) return null;
+  const x = (cost - REBOUND_COEF * p * shares) / REBOUND_GAP;
+  if (!(x > 0)) return null;
+  return Math.round(x * 100) / 100;
 }
-/* 统一取「下一笔买入价」：按模式取实际约束价，无解则回退理想阶梯价 */
-function nextBuyPrice(fund, mode) {
+/* 下一笔买入价：永远取理想阶梯价（上一笔 × 0.96，与 PHP 对齐）。
+   触发价只是信号线——实付价必然偏离，所以实际模式修正的是金额（见 correctedNextAmount），不是价格。 */
+function nextBuyPrice(fund) {
   const records = fund.records || [];
   const lastPrice = records.length ? toFloat(records[records.length - 1].price) : null;
   if (lastPrice === null || !(lastPrice > 0)) return null;
-  const ideal = lastPrice * LOSS_COEF;
-  if (normalizeAddMode(mode) !== "actual") return ideal;
-  const amount = records.length < MAX_LEVEL ? getNextBuyAmountFor(fund, records.length) : 0;
-  const actual = actualNextPrice(fund, amount);
-  return actual !== null ? actual : ideal;
+  return lastPrice * LOSS_COEF;
+}
+/* 下一笔买入金额（按模式）：
+   ideal  = 表内序列金额；actual = 「5% 回本」精算金额与表内金额取大（偏离越深加码越多）。
+   refPrice 为精算参考价（成交价未知，默认当前净值；净值缺失时回退理想触发价）。 */
+function correctedNextAmount(fund, mode, refPrice) {
+  const records = fund.records || [];
+  if (records.length >= MAX_LEVEL) return null; // 投满无下一笔
+  const base = getNextBuyAmountFor(fund, records.length);
+  if (normalizeAddMode(mode) !== "actual") return base;
+  const ref = (toFloat(refPrice) > 0) ? toFloat(refPrice) : nextBuyPrice(fund);
+  const x = actualBuyAmount(fund, ref);
+  return (x !== null && x > base) ? x : base;
 }
 function calculateProfit(fund) {
   const records = fund.records || [];
@@ -305,9 +317,9 @@ function calculateNextTarget(fund, mode) {
   if (records.length >= MAX_LEVEL || calculateProfit(fund).totalShares <= 0) {
     return { text: "--", price: lastPrice * LOSS_COEF, amount: null };
   }
-  const amount = getNextBuyAmountFor(fund, records.length);
-  const target = nextBuyPrice(fund, mode);
-  const tag = normalizeAddMode(mode) === "actual" ? "实际触发 " : "";
+  const amount = correctedNextAmount(fund, mode, toFloat(fund.currentPrice));
+  const target = nextBuyPrice(fund);
+  const tag = normalizeAddMode(mode) === "actual" ? "回本精算 " : "";
   return { text: `${target.toFixed(4)} (${tag}${amount}元)`, price: target, amount };
 }
 function calculateTheoretical(fund) {
@@ -330,14 +342,14 @@ function getFirstBuyChange(fund) {
    stale       请同步数据：净值无效（兜底，防脏数据出错误信号）
    resting     待重开：买过但持仓份额已减光（止盈离场）
    take_profit 触发止盈：收益率 ≥ 止盈目标
-   exhausted   弹药用尽：已买满 MAX_LEVEL 笔且未止盈
-   add         触发买入：现价 ≤ 下一笔买入价（理想=上一笔×0.96；实际=5% 回本约束反推）
+   exhausted   弹药用尽：已买满 MAX_LEVEL 笔且止盈前
+   add         触发买入：现价 ≤ 下一笔买入价（理想阶梯价 = 上一笔×0.96；加仓模式只改金额，不改信号线）
    holding     持有中：其余（现价高于上一笔为「底部反弹」，否则「持有中」）
 
    排序（sortKey 三元素 [组号, 0, 组内值]，cmpKey 逐元素升序）：
    组 0 止盈（收益率高的在前）｜组 1 触发买入（超跌幅度大的在前，跌得越深越紧急）
    组 2 持有中（距触发买入越近越前）｜组 3 弹药用尽｜组 4 沉底（待重开/待建仓/请同步） */
-function signalFor(fund, mode) {
+function signalFor(fund) {
   const records = fund.records || [];
   if (!records.length) {
     return { state: "init", label: "待建仓", level: "gray", sortKey: [4, 0, 999] };
@@ -358,7 +370,7 @@ function signalFor(fund, mode) {
   if (records.length >= MAX_LEVEL) {
     return { state: "exhausted", label: "弹药用尽", level: "gray", sortKey: [3, 0, 999] };
   }
-  const nextPrice = nextBuyPrice(fund, mode);
+  const nextPrice = nextBuyPrice(fund);
   const dropPct = (currentPrice - nextPrice) / currentPrice * 100; // 超跌幅度（相对现价）
   const gapPct = (currentPrice - nextPrice) / lastPrice * 100;   // 距触发还差（相对上一笔，PHP 口径）
   if (currentPrice <= nextPrice) {
@@ -373,22 +385,26 @@ function signalFor(fund, mode) {
 }
 
 /* 派生状态字段（与 PHP fund_state 输出对齐，供卡片 meta 行与详情信号盒使用）。
-   triggerNav 随加仓模式变化：ideal=上一笔×0.96；actual=5% 回本约束反推价。 */
+   triggerNav 永远为理想阶梯价（信号线，与 PHP 一致）；
+   nextAmount 随加仓模式变化：ideal=表内序列金额；actual=「5% 回本」精算金额（与表内取大）。 */
 function fundState(fund, mode) {
   const records = fund.records || [];
   const level = records.length;
   const profit = calculateProfit(fund);
   const currentPrice = toFloat(fund.currentPrice);
   const lastPrice = level ? toFloat(records[level - 1].price) : null;
-  // triggerNav 口径对齐 PHP：有上一笔就给值（投满时 actual 无解自动回退 ideal 价）
-  const rawTrigger = (lastPrice !== null && lastPrice > 0) ? nextBuyPrice(fund, mode) : null;
+  // triggerNav 口径对齐 PHP：有上一笔就给值（纯理想阶梯，与模式无关）
+  const rawTrigger = (lastPrice !== null && lastPrice > 0) ? nextBuyPrice(fund) : null;
   const triggerNav = rawTrigger !== null ? Math.round(rawTrigger * 10000) / 10000 : null;
   const stopTarget = toFloat(fund.stopProfitTarget, 20);
   const tpTargetMV = profit.totalCost > 0 ? Math.round(profit.totalCost * (1 + stopTarget / 100) * 100) / 100 : null;
   const gapPct = (currentPrice > 0 && lastPrice !== null && lastPrice > 0 && triggerNav !== null)
     ? Math.round((currentPrice - triggerNav) / lastPrice * 10000) / 100 : null;
-  // nextAmount 口径对齐 PHP：未建仓也给首档金额（seq[0]），投满为 null
-  const nextAmount = level < MAX_LEVEL ? getNextBuyAmountFor(fund, level) : null;
+  // nextAmount 口径：未建仓也给首档金额（seq[0]），投满为 null；actual 模式为回本精算金额
+  const nextAmount = correctedNextAmount(fund, mode, currentPrice);
+  const baseAmount = level < MAX_LEVEL ? getNextBuyAmountFor(fund, level) : null;
+  // 精算参考价：成交价未知，默认当前净值；净值缺失回退理想触发价（前端可按真实成交价重算）
+  const reboundRef = (currentPrice > 0) ? currentPrice : (rawTrigger !== null ? Math.round(rawTrigger * 10000) / 10000 : null);
   return {
     level,
     refNav: lastPrice,
@@ -398,6 +414,8 @@ function fundState(fund, mode) {
     marketValue: (currentPrice > 0 && profit.totalShares > 0) ? Math.round(profit.totalValue * 100) / 100 : null,
     returnRate: profit.totalCost > 0 ? Math.round(profit.profitPercent * 100) / 100 : null,
     nextAmount,
+    baseAmount,
+    reboundRef,
     triggerNav,
     tpTargetMV,
     gapPct,
@@ -417,7 +435,7 @@ function enrichFund(fund, mode) {
       nextTarget: calculateNextTarget(fund, mode),
       theoretical: calculateTheoretical(fund),
       firstBuyChange: getFirstBuyChange(fund),
-      signal: signalFor(fund, mode),
+      signal: signalFor(fund),
       state: fundState(fund, mode),
       ideal: idealTrack(fund),
       recordCount: out.records.length,
@@ -685,8 +703,8 @@ async function maybeNotifySignals(env, store, funds) {
 function buildLlmContext(store, funds, addMode) {
   const mode = normalizeAddMode(addMode);
   const modeNote = mode === "actual"
-    ? "当前为「实际 5% 回本」模式：nextTriggerNav 由「买入后从买入价上涨 5% 即回本」反推（P=(cost-0.05A)/(1.05·shares)），非理想阶梯价。"
-    : "当前为「理想阶梯」模式：nextTriggerNav = 上一笔成交净值 × 0.96。";
+    ? "当前为「实际 5% 回本」模式：nextTriggerNav 仍为理想阶梯信号价（上一笔成交净值×0.96），但 nextAddAmount 为按「成交后从成交价上涨 5% 恰好回本」精算的金额（X=(cost−1.05·P·shares)/0.05，参考价 reboundRef 默认为当前净值，与表内金额取大），用于纠正实付价偏离阶梯价时的加仓金额；nextAddAmountBase 为理想剧本表内序列金额。"
+    : "当前为「理想阶梯」模式：nextTriggerNav = 上一笔成交净值 × 0.96，nextAddAmount 为表内序列金额。";
   const list = funds.map((fund) => {
     const s = fund.summary || {};
     const st = s.state || {};
@@ -705,6 +723,8 @@ function buildLlmContext(store, funds, addMode) {
       returnRatePct: st.returnRate ?? null,
       signal: sig.state || null,
       nextAddAmount: st.nextAmount ?? null,
+      nextAddAmountBase: st.baseAmount ?? null,
+      reboundRef: st.reboundRef ?? null,
       nextTriggerNav: st.triggerNav ?? null,
       tpTargetMV: st.tpTargetMV ?? null,
       breakevenPrice: st.breakeven ? st.breakeven.price : null,
