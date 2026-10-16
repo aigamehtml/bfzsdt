@@ -493,7 +493,7 @@
     }
 
     /* ============================================================
-       卡片 meta 行：层级 + 触发价 + 距触发差距标签（≤1% 高亮）
+       卡片 meta 行：层级 + 触发价（距触发信息由信号标签承载，不重复展示）
        ============================================================ */
     .fund-meta-row {
       display: flex;
@@ -516,22 +516,6 @@
       font-weight: 700;
       color: var(--text-secondary);
       font-family: ui-monospace, monospace;
-    }
-    .fund-gap {
-      display: inline-flex;
-      align-items: center;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 3px 10px;
-      border-radius: 999px;
-    }
-    .fund-gap.hot {
-      background: var(--warning-light);
-      color: #92400e;
-    }
-    .fund-gap.cold {
-      background: var(--primary-light);
-      color: var(--primary-dark);
     }
 
     /* Empty State */
@@ -2111,11 +2095,8 @@
         const nameClass = level === "green" ? "text-green" :
           level === "orange" ? "text-orange" :
           level === "red" ? "text-red" : "";
-        /* meta 行：层级 + 触发价 + 距触发差距（≤1% 高亮；>1% 信息已在信号文案中，不重复展示） */
+        /* meta 行：层级 + 触发价（距触发信息已在信号标签中展示，不重复） */
         const layer = st.level || 0;
-        const gap = (st.gapPct === null || st.gapPct === undefined) ? null : st.gapPct;
-        const gapHtml = (gap !== null && layer > 0 && gap <= 1)
-          ? `<span class="fund-gap hot">距触发 ${gap.toFixed(2)}%</span>` : "";
         const triggerHtml = (st.triggerNav !== null && st.triggerNav !== undefined && layer > 0)
           ? `<span class="fund-trigger">触发 ${price(st.triggerNav)}</span>` : "";
         return `
@@ -2135,7 +2116,6 @@
               <div class="fund-meta-row">
                 <span class="fund-layer">第 ${layer} 层 / 10</span>
                 ${triggerHtml}
-                ${gapHtml}
               </div>
               ${fund.remark ? `<div class="fund-remark">📝 ${htmlEscape(fund.remark)}</div>` : ""}
             </article>`;
