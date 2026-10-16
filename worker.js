@@ -15,6 +15,14 @@ const LOSS_COEF = 0.96;
 const ADD_MULT = 1.8;
 const MAX_LEVEL = 10;
 const BASE_SEQ = [10, 10, 10, 20, 40, 72, 129, 233, 419, 755];
+/* 回本系数：下一笔买入价 P 满足「买完后从 P 上涨 5% 即回本」（经验法则，实际模式用） */
+const REBOUND_COEF = 1.05;
+const REBOUND_GAP = REBOUND_COEF - 1; // 0.05
+/* 加仓模式：ideal=理想阶梯（上一笔×0.96，默认）；actual=实际 5% 回本约束反推买入价 */
+const ADD_MODES = ["ideal", "actual"];
+function normalizeAddMode(m) {
+  return ADD_MODES.includes(m) ? m : "ideal";
+}
 
 /* ---------------- 工具函数 ---------------- */
 /* 按 Asia/Shanghai 输出 YYYY-MM-DD。
@@ -185,6 +193,47 @@ function idealTrack(fund) {
     limit: Math.round((1 - LOSS_COEF) / (ADD_MULT - LOSS_COEF) * 10000) / 100,
   };
 }
+/* ---------------- 实际回本计算（非理想剧本，按真实持仓实算） ----------------
+   经验法则「最新买入价 × 1.05 回本」只在理想剧本中后段成立（第 4 层起），
+   现实中成交价不在严格 -4% 上，唯一准确的口径是平均成本：回本价 = 成本 ÷ 份额。 */
+function breakevenInfo(fund) {
+  const profit = calculateProfit(fund);
+  const cur = toFloat(fund.currentPrice);
+  const cost = profit.totalCost;
+  const shares = profit.totalShares;
+  if (cost <= 0 || shares <= 0) return null; // 无持仓（首笔前/已离场）
+  const bePrice = cost / shares;
+  const gapPct = cur > 0 ? (bePrice - cur) / cur * 100 : null; // 正=还差这么多才回本，负=已回本
+  return {
+    price: Math.round(bePrice * 10000) / 10000,
+    gapPct: gapPct === null ? null : Math.round(gapPct * 100) / 100,
+  };
+}
+/* 实际模式下一笔买入价：令「以 P 买入 amount 后，从 P 上涨 5% 恰好回本」。
+   推导：(cost+amount)/(shares+amount/P) = 1.05P
+      ⟹ cost+amount = 1.05·P·shares + 1.05·amount
+      ⟹ P = (cost - 0.05·amount) / (1.05·shares)
+   无解（首笔前 / 金额过大使分子≤0）时返回 null，由调用方回退理想阶梯。 */
+function actualNextPrice(fund, amount) {
+  const profit = calculateProfit(fund);
+  const cost = profit.totalCost;
+  const shares = profit.totalShares;
+  if (cost <= 0 || shares <= 0 || !(amount > 0)) return null;
+  const p = (cost - REBOUND_GAP * amount) / (REBOUND_COEF * shares);
+  if (!(p > 0)) return null;
+  return Math.round(p * 10000) / 10000;
+}
+/* 统一取「下一笔买入价」：按模式取实际约束价，无解则回退理想阶梯价 */
+function nextBuyPrice(fund, mode) {
+  const records = fund.records || [];
+  const lastPrice = records.length ? toFloat(records[records.length - 1].price) : null;
+  if (lastPrice === null || !(lastPrice > 0)) return null;
+  const ideal = lastPrice * LOSS_COEF;
+  if (normalizeAddMode(mode) !== "actual") return ideal;
+  const amount = records.length < MAX_LEVEL ? getNextBuyAmountFor(fund, records.length) : 0;
+  const actual = actualNextPrice(fund, amount);
+  return actual !== null ? actual : ideal;
+}
 function calculateProfit(fund) {
   const records = fund.records || [];
   const currentPrice = toFloat(fund.currentPrice);
@@ -246,19 +295,20 @@ function calculateAnnualizedReturn(fund) {
   const sign = annualized >= 0 ? "+" : "";
   return `${sign}${annualized.toFixed(2)}%`;
 }
-function calculateNextTarget(fund) {
+function calculateNextTarget(fund, mode) {
   const records = fund.records || [];
   if (!records.length) {
     return { text: "待录入", price: null, amount: getNextBuyAmount() };
   }
   const lastPrice = toFloat(records[records.length - 1].price);
-  const target = lastPrice * LOSS_COEF;
   /* 投满 / 已离场：没有下一笔 */
   if (records.length >= MAX_LEVEL || calculateProfit(fund).totalShares <= 0) {
-    return { text: "--", price: target, amount: null };
+    return { text: "--", price: lastPrice * LOSS_COEF, amount: null };
   }
   const amount = getNextBuyAmountFor(fund, records.length);
-  return { text: `${target.toFixed(4)} (${amount}元)`, price: target, amount };
+  const target = nextBuyPrice(fund, mode);
+  const tag = normalizeAddMode(mode) === "actual" ? "实际触发 " : "";
+  return { text: `${target.toFixed(4)} (${tag}${amount}元)`, price: target, amount };
 }
 function calculateTheoretical(fund) {
   const records = fund.records || [];
@@ -281,13 +331,13 @@ function getFirstBuyChange(fund) {
    resting     待重开：买过但持仓份额已减光（止盈离场）
    take_profit 触发止盈：收益率 ≥ 止盈目标
    exhausted   弹药用尽：已买满 MAX_LEVEL 笔且未止盈
-   add         触发买入：现价 ≤ 上一笔成交净值 × 0.96
+   add         触发买入：现价 ≤ 下一笔买入价（理想=上一笔×0.96；实际=5% 回本约束反推）
    holding     持有中：其余（现价高于上一笔为「底部反弹」，否则「持有中」）
 
    排序（sortKey 三元素 [组号, 0, 组内值]，cmpKey 逐元素升序）：
    组 0 止盈（收益率高的在前）｜组 1 触发买入（超跌幅度大的在前，跌得越深越紧急）
    组 2 持有中（距触发买入越近越前）｜组 3 弹药用尽｜组 4 沉底（待重开/待建仓/请同步） */
-function signalFor(fund) {
+function signalFor(fund, mode) {
   const records = fund.records || [];
   if (!records.length) {
     return { state: "init", label: "待建仓", level: "gray", sortKey: [4, 0, 999] };
@@ -305,10 +355,10 @@ function signalFor(fund) {
     return { state: "take_profit", label: `触发止盈 (收益${profit.profitPercent.toFixed(2)}%)`, level: "red", sortKey: [0, 0, -profit.profitPercent] };
   }
   const lastPrice = toFloat(records[records.length - 1].price);
-  const nextPrice = lastPrice * LOSS_COEF;
   if (records.length >= MAX_LEVEL) {
     return { state: "exhausted", label: "弹药用尽", level: "gray", sortKey: [3, 0, 999] };
   }
+  const nextPrice = nextBuyPrice(fund, mode);
   const dropPct = (currentPrice - nextPrice) / currentPrice * 100; // 超跌幅度（相对现价）
   const gapPct = (currentPrice - nextPrice) / lastPrice * 100;   // 距触发还差（相对上一笔，PHP 口径）
   if (currentPrice <= nextPrice) {
@@ -322,14 +372,17 @@ function signalFor(fund) {
   return { state: "holding", label: `持有中 (距触发还差 ${gapPct.toFixed(2)}%)`, level: "gray", sortKey: [2, 0, gapPct] };
 }
 
-/* 派生状态字段（与 PHP fund_state 输出对齐，供卡片 meta 行与详情信号盒使用） */
-function fundState(fund) {
+/* 派生状态字段（与 PHP fund_state 输出对齐，供卡片 meta 行与详情信号盒使用）。
+   triggerNav 随加仓模式变化：ideal=上一笔×0.96；actual=5% 回本约束反推价。 */
+function fundState(fund, mode) {
   const records = fund.records || [];
   const level = records.length;
   const profit = calculateProfit(fund);
   const currentPrice = toFloat(fund.currentPrice);
   const lastPrice = level ? toFloat(records[level - 1].price) : null;
-  const triggerNav = lastPrice !== null && lastPrice > 0 ? Math.round(lastPrice * LOSS_COEF * 10000) / 10000 : null;
+  // triggerNav 口径对齐 PHP：有上一笔就给值（投满时 actual 无解自动回退 ideal 价）
+  const rawTrigger = (lastPrice !== null && lastPrice > 0) ? nextBuyPrice(fund, mode) : null;
+  const triggerNav = rawTrigger !== null ? Math.round(rawTrigger * 10000) / 10000 : null;
   const stopTarget = toFloat(fund.stopProfitTarget, 20);
   const tpTargetMV = profit.totalCost > 0 ? Math.round(profit.totalCost * (1 + stopTarget / 100) * 100) / 100 : null;
   const gapPct = (currentPrice > 0 && lastPrice !== null && lastPrice > 0 && triggerNav !== null)
@@ -348,9 +401,11 @@ function fundState(fund) {
     triggerNav,
     tpTargetMV,
     gapPct,
+    // 实际回本（平均成本法，与模式无关，始终展示真实口径）
+    breakeven: breakevenInfo(fund),
   };
 }
-function enrichFund(fund) {
+function enrichFund(fund, mode) {
   const out = { ...fund };
   out.records = Array.isArray(fund.records) ? [...fund.records] : [];
   const profit = calculateProfit(fund);
@@ -359,11 +414,11 @@ function enrichFund(fund) {
     summary: {
       profit,
       annualized: calculateAnnualizedReturn(fund),
-      nextTarget: calculateNextTarget(fund),
+      nextTarget: calculateNextTarget(fund, mode),
       theoretical: calculateTheoretical(fund),
       firstBuyChange: getFirstBuyChange(fund),
-      signal: signalFor(fund),
-      state: fundState(fund),
+      signal: signalFor(fund, mode),
+      state: fundState(fund, mode),
       ideal: idealTrack(fund),
       recordCount: out.records.length,
     },
@@ -377,8 +432,8 @@ function cmpKey(x, y) {
   }
   return 0;
 }
-function sortFundsForView(funds) {
-  const enriched = funds.map(enrichFund);
+function sortFundsForView(funds, mode) {
+  const enriched = funds.map((f) => enrichFund(f, mode));
   enriched.sort((a, b) => cmpKey(a.summary.signal.sortKey, b.summary.signal.sortKey));
   return enriched;
 }
@@ -627,7 +682,11 @@ async function maybeNotifySignals(env, store, funds) {
   if (changed) await saveStore(env, store);
 }
 /* AI 分析上下文：全部实盘数据 + 提示词（与 PHP /llm/context 对齐） */
-function buildLlmContext(store, funds) {
+function buildLlmContext(store, funds, addMode) {
+  const mode = normalizeAddMode(addMode);
+  const modeNote = mode === "actual"
+    ? "当前为「实际 5% 回本」模式：nextTriggerNav 由「买入后从买入价上涨 5% 即回本」反推（P=(cost-0.05A)/(1.05·shares)），非理想阶梯价。"
+    : "当前为「理想阶梯」模式：nextTriggerNav = 上一笔成交净值 × 0.96。";
   const list = funds.map((fund) => {
     const s = fund.summary || {};
     const st = s.state || {};
@@ -648,14 +707,16 @@ function buildLlmContext(store, funds) {
       nextAddAmount: st.nextAmount ?? null,
       nextTriggerNav: st.triggerNav ?? null,
       tpTargetMV: st.tpTargetMV ?? null,
+      breakevenPrice: st.breakeven ? st.breakeven.price : null,
+      breakevenGapPct: st.breakeven ? st.breakeven.gapPct : null,
       idealTrack: s.ideal || null,
       records: (fund.records || []).map((r) => ({ date: r.buyTime, nav: r.price, amount: r.amount, shares: r.shares })),
       reductions: (fund.reductions || []).map((r) => ({ date: r.reduceTime, nav: r.price, amount: r.amount, shares: r.shares })),
     };
   });
-  const prompt = "你是一位专业的基金定投策略分析助手。用户执行「百分之四定投法」：基金净值每下跌 4% 按金字塔序列加仓一笔（首投¥10 的基准序列为 10/10/10/20/40/72/129/233/419/755，随首投金额等比缩放，上限 10 笔），通过几何加仓把浮亏锁定在约 4.76% 以内；当持仓总市值 ≥ 累计成本 × (1+止盈目标%) 时止盈离场，然后等待重开新一轮。以下是用户全部实盘数据（JSON）：\n\n{FUNDS}\n\n请对每一只基金分别给出：① 当前状态小结（层级、浮盈亏、是否触发加仓/止盈、剩余弹药）；② 短期止盈目标建议（1–3 个月，给出具体百分比与理由）；③ 长期止盈目标建议（6–12 个月，给出具体百分比与理由）；④ 风险提示。要求：止盈目标给明确百分比，区分短期与长期逻辑，最后注明「以上仅为基于历史数据的模型演算，不构成投资建议」。";
+  const prompt = "你是一位专业的基金定投策略分析助手。用户执行「百分之四定投法」：基金净值每下跌 4% 按金字塔序列加仓一笔（首投¥10 的基准序列为 10/10/10/20/40/72/129/233/419/755，随首投金额等比缩放，上限 10 笔），通过几何加仓把浮亏锁定在约 4.76% 以内；当持仓总市值 ≥ 累计成本 × (1+止盈目标%) 时止盈离场，然后等待重开新一轮。" + modeNote + "每只基金的 breakevenPrice 为实际回本价（累计成本÷持仓份额），breakevenGapPct 为现价距回本还差的涨幅（负值表示已回本）。以下是用户全部实盘数据（JSON）：\n\n{FUNDS}\n\n请对每一只基金分别给出：① 当前状态小结（层级、浮盈亏、是否触发加仓/止盈、剩余弹药）；② 短期止盈目标建议（1–3 个月，给出具体百分比与理由）；③ 长期止盈目标建议（6–12 个月，给出具体百分比与理由）；④ 风险提示。要求：止盈目标给明确百分比，区分短期与长期逻辑，最后注明「以上仅为基于历史数据的模型演算，不构成投资建议」。";
   return {
-    meta: { strategy: "百分之四定投法", account: store.currentAccount, exportedAt: nowIso() },
+    meta: { strategy: "百分之四定投法", account: store.currentAccount, addMode: mode, exportedAt: nowIso() },
     funds: list,
     prompt,
     text: prompt.replace("{FUNDS}", JSON.stringify(list, null, 2)),
@@ -739,7 +800,9 @@ async function handle(path, method, url, request, env, ctx) {
       const n = acc.name;
       counts[n] = (store.fundsByAccount[n] || []).length;
     }
-    const enriched = sortFundsForView(funds);
+    const settings = await loadSettings(env);
+    const addMode = normalizeAddMode(settings.addMode);
+    const enriched = sortFundsForView(funds, addMode);
     /* 信号变化推送（配置了 webhook 才动作；不阻塞响应，失败静默） */
     try {
       const notify = maybeNotifySignals(env, store, enriched);
@@ -752,6 +815,7 @@ async function handle(path, method, url, request, env, ctx) {
       currentAccount: store.currentAccount,
       funds: enriched,
       fundCounts: counts,
+      addMode,
     });
   }
   if (path === "/api/settings" && method === "GET") {
@@ -759,6 +823,7 @@ async function handle(path, method, url, request, env, ctx) {
     return json({
       success: true,
       data: {
+        addMode: normalizeAddMode(settings.addMode),
         strategy: {
           lossCoef: LOSS_COEF,
           dropPct: Math.round((1 - LOSS_COEF) * 1000) / 10,
@@ -766,6 +831,9 @@ async function handle(path, method, url, request, env, ctx) {
           maxLevel: MAX_LEVEL,
           baseSeq: BASE_SEQ.join(","),
           lossLimit: Math.round((1 - LOSS_COEF) / (ADD_MULT - LOSS_COEF) * 10000) / 100,
+          reboundCoef: REBOUND_COEF,
+          addModes: ADD_MODES,
+          addMode: normalizeAddMode(settings.addMode),
         },
         notify: {
           configured: !!settings.zohoWebhookUrl,
@@ -782,8 +850,15 @@ async function handle(path, method, url, request, env, ctx) {
       return json({ success: false, message: "Webhook 地址须以 http(s):// 开头" }, 400);
     }
     settings.zohoWebhookUrl = url || "";
+    /* 加仓模式：ideal=理想阶梯；actual=实际 5% 回本约束。缺省/非法值归一为 ideal */
+    if (data.addMode !== undefined) {
+      if (!ADD_MODES.includes(data.addMode)) {
+        return json({ success: false, message: "加仓模式仅支持 ideal / actual" }, 400);
+      }
+      settings.addMode = data.addMode;
+    }
     await saveSettings(env, settings);
-    return json({ success: true, configured: !!settings.zohoWebhookUrl });
+    return json({ success: true, configured: !!settings.zohoWebhookUrl, addMode: normalizeAddMode(settings.addMode) });
   }
   if (path === "/api/notify/test" && method === "POST") {
     const ok = await notifyZoho(env, "【定投导航仪】测试邮件", "<p>这是一封测试邮件。</p><p>收到说明 Webhook 配置正确，后续检测到新加仓/止盈信号时会自动推送。</p>");
@@ -793,8 +868,10 @@ async function handle(path, method, url, request, env, ctx) {
   }
   if (path === "/api/llm-context" && method === "GET") {
     const store = await loadStore(env);
-    const enriched = currentFunds(store).map(enrichFund);
-    const out = buildLlmContext(store, enriched);
+    const settings = await loadSettings(env);
+    const addMode = normalizeAddMode(settings.addMode);
+    const enriched = currentFunds(store).map((f) => enrichFund(f, addMode));
+    const out = buildLlmContext(store, enriched, addMode);
     if (url.searchParams.get("format") === "text") {
       return new Response(out.text, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
