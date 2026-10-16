@@ -2348,6 +2348,12 @@
             </div>
             <div class="set-mini" style="margin:10px 0 0;">实际触发价公式：(成本 − 5% × 下一笔金额) ÷ (1.05 × 持仓份额)，令「以该价买入后涨 5% 恰好回本」；无解（已接近回本）时自动回退理想阶梯价。下一笔买入口径可在设置页切换。</div>
           </div>`;
+      } else if (records.length) {
+        beHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">5% 回本测算</div>
+            <div class="ideal-sub">当前无持仓（本轮已止盈离场或份额已清空），重新建仓后按真实持仓计算回本价</div>
+          </div>`;
       } else {
         beHtml = `
           <div class="detail-card">
