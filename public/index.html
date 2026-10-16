@@ -683,6 +683,85 @@
       line-height: 1.7;
       margin-top: 10px;
     }
+    .mode-switch {
+      display: flex;
+      gap: 6px;
+    }
+    .mode-btn {
+      padding: 7px 12px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 800;
+      background: var(--bg);
+      color: var(--text-secondary);
+      transition: all 0.2s;
+    }
+    .mode-btn.active {
+      background: var(--primary-light);
+      color: var(--primary-dark);
+    }
+    /* ============================================================
+       5% 回本测算卡（实际口径 + 双模式触发价对比）
+       ============================================================ */
+    .be-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .be-item {
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .be-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .be-value {
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .be-modes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .be-mode {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .be-mode.cur {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+    .be-mode-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .be-cur-tag {
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--primary-dark);
+      background: #fff;
+      border-radius: 999px;
+      padding: 2px 8px;
+      flex-shrink: 0;
+    }
+    .be-mode-val {
+      font-size: 15px;
+      font-weight: 800;
+    }
     .set-input {
       width: 100%;
       padding: 11px 14px;
@@ -1932,6 +2011,7 @@
       state.currentAccount = data.currentAccount || "";
       state.fundCounts = data.fundCounts || {};
       state.funds = data.funds || [];
+      state.addMode = data.addMode || "ideal";
       renderAccountHeader();
       renderFundList();
       updateStopBanner();
@@ -2230,6 +2310,51 @@
             <div class="ideal-sub">待建仓后生成（录入第一笔买入后展示理想剧本）</div>
           </div>`;
       }
+      /* 5% 回本测算卡：实际回本价/距回本涨幅 + 双模式触发价对比（当前模式高亮） */
+      const be = st.breakeven || null;
+      const beIdealTrigger = (st.refNav && st.refNav > 0) ? Math.round(st.refNav * 0.96 * 10000) / 10000 : null;
+      const beActualRaw = (st.actualCost && st.actualShares && st.nextAmount)
+        ? (st.actualCost - 0.05 * st.nextAmount) / (1.05 * st.actualShares) : null;
+      const beActualTrigger = (beActualRaw !== null && beActualRaw > 0) ? Math.round(beActualRaw * 10000) / 10000 : null;
+      let beHtml = "";
+      if (be) {
+        const gapTxt = (be.gapPct === null || be.gapPct === undefined) ? "--"
+          : (be.gapPct >= 0 ? `还差 ${be.gapPct.toFixed(2)}%` : `已回本 ${Math.abs(be.gapPct).toFixed(2)}%`);
+        const gapCls = (be.gapPct !== null && be.gapPct !== undefined && be.gapPct < 0) ? "text-red" : "text-green";
+        const mode = state.addMode === "actual" ? "actual" : "ideal";
+        beHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">5% 回本测算</div>
+            <div class="ideal-sub">实际口径 · 按真实持仓成本 ÷ 份额计算，与加仓模式无关</div>
+            <div class="be-grid">
+              <div class="be-item">
+                <div class="be-label">实际回本价</div>
+                <div class="be-value mono">${price(be.price)}</div>
+              </div>
+              <div class="be-item">
+                <div class="be-label">现价距回本</div>
+                <div class="be-value mono ${gapCls}">${gapTxt}</div>
+              </div>
+            </div>
+            <div class="be-modes">
+              <div class="be-mode ${mode === "ideal" ? "cur" : ""}">
+                <div class="be-mode-head"><span>理想阶梯触发价</span>${mode === "ideal" ? '<span class="be-cur-tag">← 当前</span>' : ""}</div>
+                <div class="be-mode-val mono">${beIdealTrigger ? price(beIdealTrigger) : "--"}</div>
+              </div>
+              <div class="be-mode ${mode === "actual" ? "cur" : ""}">
+                <div class="be-mode-head"><span>实际 5% 回本触发价</span>${mode === "actual" ? '<span class="be-cur-tag">← 当前</span>' : ""}</div>
+                <div class="be-mode-val mono">${beActualTrigger ? price(beActualTrigger) : "无解 · 已回退"}</div>
+              </div>
+            </div>
+            <div class="set-mini" style="margin:10px 0 0;">实际触发价公式：(成本 − 5% × 下一笔金额) ÷ (1.05 × 持仓份额)，令「以该价买入后涨 5% 恰好回本」；无解（已接近回本）时自动回退理想阶梯价。下一笔买入口径可在设置页切换。</div>
+          </div>`;
+      } else {
+        beHtml = `
+          <div class="detail-card">
+            <div class="ideal-title">5% 回本测算</div>
+            <div class="ideal-sub">待建仓后生成（录入第一笔买入后按真实持仓计算回本价）</div>
+          </div>`;
+      }
       els.detailContent.innerHTML = `
           <div class="detail-card">
             <div class="detail-card-head">
@@ -2263,6 +2388,7 @@
             </div>
           </div>
 ${idealHtml}
+${beHtml}
           <div class="detail-card">
             <div class="profit-section" style="margin-bottom:0;">
               <div class="profit-header">
@@ -2656,6 +2782,7 @@ ${idealHtml}
       settingsCache = cfg;
       const st = cfg.strategy || {};
       const nt = cfg.notify || {};
+      const addMode = st.addMode || "ideal";
       els.settingsContent.innerHTML = `
         <div class="set-card">
           <div class="set-card-title">策略参数（百分之四定投法）</div>
@@ -2664,7 +2791,14 @@ ${idealHtml}
           <div class="set-row"><span>层级上限</span><b>${st.maxLevel ?? 10} 笔</b></div>
           <div class="set-row"><span>浮亏锁线</span><b>≈ ${st.lossLimit ?? 4.76}%</b></div>
           <div class="set-row"><span>基准加仓序列</span><b class="mono" style="font-size:11px">${htmlEscape(st.baseSeq || "")}</b></div>
-          <div class="set-mini">序列随每只基金的首投金额等比缩放；理想剧本下浮亏锁线 ≈ 4.76%，任意层反弹 5% 即回本。</div>
+          <div class="set-row" style="border-bottom:none">
+            <span>加仓模式</span>
+            <div class="mode-switch">
+              <button class="mode-btn ${addMode === "ideal" ? "active" : ""}" data-mode="ideal">理想阶梯</button>
+              <button class="mode-btn ${addMode === "actual" ? "active" : ""}" data-mode="actual">实际5%回本</button>
+            </div>
+          </div>
+          <div class="set-mini"><b>理想阶梯</b>：下一笔触发价 = 上一笔成交净值 × 0.96（严格 -4% 阶梯，理论上浮亏锁死 4.76%）。<br><b>实际5%回本</b>：按真实持仓成本 ÷ 份额反推买入价，令「买完后从买入价涨 5% 恰好回本」——现实中成交价不在 -4% 上时更准。模式切换即时生效，首页排序与信号同步刷新。</div>
         </div>
         <div class="set-card">
           <div class="set-card-title">通知（Zoho 邮件 · 可选）</div>
@@ -2700,6 +2834,23 @@ ${idealHtml}
       $("btnSettingsImport").addEventListener("click", () => els.importInput.click());
       $("btnCopyLlm").addEventListener("click", copyLlm);
       $("btnOpenLlm").addEventListener("click", () => window.open("/api/llm-context?format=text", "_blank"));
+      document.querySelectorAll(".mode-btn").forEach((btn) => {
+        btn.addEventListener("click", () => saveAddMode(btn.dataset.mode));
+      });
+    }
+
+    /* 加仓模式切换：ideal=理想阶梯；actual=实际 5% 回本约束。保存后全量刷新 */
+    async function saveAddMode(mode) {
+      if (state.addMode === mode) return;
+      try {
+        await api("/api/settings", { method: "POST", body: { addMode: mode } });
+        state.addMode = mode;
+        showToast(mode === "actual" ? "已切换：实际 5% 回本模式" : "已切换：理想阶梯模式");
+        await loadState();
+        renderSettings();
+      } catch (err) {
+        showToast(err.message);
+      }
     }
 
     async function saveNotify() {
