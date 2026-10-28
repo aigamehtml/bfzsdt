@@ -1839,6 +1839,49 @@
       .fund-layer { padding: 4px 8px; }
       .account-card { padding: 17px; }
     }
+    /* ============================================================
+       详情页锚点跳转条：加仓计算表 / 回本测算移到页面底部后的直达按钮
+       ============================================================ */
+    .jump-nav {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .jump-btn {
+      flex: 1;
+      min-width: 0;
+      height: 46px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.2s;
+    }
+    .jump-btn:active {
+      transform: scale(0.96);
+      background: var(--primary-light);
+      border-color: var(--primary);
+    }
+    .jump-icon { font-size: 14px; }
+    .jump-arrow { color: var(--primary); font-weight: 800; }
+    /* 目标卡滚动偏移：避开 sticky 详情页头部（含顶部安全区），否则跳转后卡片标题被盖住 */
+    .jump-anchor { scroll-margin-top: calc(72px + var(--safe-top)); }
+    .anchor-flash { animation: anchorFlash 1.2s ease-out; }
+    @keyframes anchorFlash {
+      0%, 100% { box-shadow: var(--shadow); }
+      20%, 65% { box-shadow: 0 0 0 3px var(--primary-light); }
+    }
+    @media (max-width: 380px) {
+      .jump-btn { height: 44px; font-size: 12px; gap: 4px; padding: 0 8px; }
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation-duration: .01ms !important;
@@ -2453,6 +2496,19 @@
       renderSettings();
     }
 
+    /* 锚点跳转：滚动容器是 .page-detail（fixed + overflow-y:auto），scrollIntoView 会滚它；
+       scroll-margin-top 已在 .jump-anchor 上预留吸顶 header 高度；跳转后目标卡闪一下便于定位。 */
+    function scrollToCard(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+      el.classList.remove("anchor-flash");
+      void el.offsetWidth; // 强制重排，保证连续点击时动画能重新触发
+      el.classList.add("anchor-flash");
+      setTimeout(() => el.classList.remove("anchor-flash"), 1200);
+    }
+
     function renderDetail(fund) {
       const s = fund.summary;
       const signal = s.signal;
@@ -2518,6 +2574,12 @@
         sigDesc = `下一触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b>（还差 ${gapTag}）`;
       }
       const sigHtml = `<div class="signal-box ${sigCls}"><div class="sig-title">${htmlEscape(signal.label)}</div><div class="sig-desc">${sigDesc}</div></div>`;
+      /* 锚点跳转条：加仓计算表 / 5% 回本测算两张卡已移到页面最底部，这里放横向双按钮直达 */
+      const jumpNavHtml = `
+          <div class="jump-nav">
+            <button class="jump-btn" data-action="jump-ideal"><span class="jump-icon">📊</span><span>加仓计算表</span><span class="jump-arrow">↓</span></button>
+            <button class="jump-btn" data-action="jump-breakeven"><span class="jump-icon">🧮</span><span>5% 回本测算</span><span class="jump-arrow">↓</span></button>
+          </div>`;
       /* 加仓计算表（理想剧本 10 行 + 当前行高亮 + 实际对照行） */
       const ideal = s.ideal;
       let idealHtml = "";
@@ -2542,7 +2604,7 @@
           actualHtml = `<div class="ideal-actual">实际：成本 <b>${money(st.actualCost)}</b> 元 ｜ 实际收益率 <b>${rr >= 0 ? "+" : ""}${rr.toFixed(2)}%</b>${beat}</div>`;
         }
         idealHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorIdeal">
             <div class="ideal-title">加仓计算表</div>
             <div class="ideal-sub">理想剧本 · 首笔基准 ${price(ideal.p0)} · 满配累计 ${money(ideal.total)} 元 · 亏损锁线 ${ideal.limit}%</div>
             <div class="ideal-grid">
@@ -2554,7 +2616,7 @@
           </div>`;
       } else {
         idealHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorIdeal">
             <div class="ideal-title">加仓计算表</div>
             <div class="ideal-sub">待建仓后生成（录入第一笔买入后展示理想剧本）</div>
           </div>`;
@@ -2569,7 +2631,7 @@
         const gapCls = (be.gapPct !== null && be.gapPct !== undefined && be.gapPct < 0) ? "text-red" : "text-green";
         const defRef = (st.reboundRef && st.reboundRef > 0) ? st.reboundRef : "";
         beHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorBreakeven">
             <div class="ideal-title">5% 回本测算</div>
             <div class="ideal-sub">实际口径 · 按真实持仓成本 ÷ 份额计算，与加仓模式无关</div>
             <div class="be-grid">
@@ -2605,7 +2667,7 @@
           : (be.gapPct >= 0 ? `还差 ${be.gapPct.toFixed(2)}%` : `已回本 ${Math.abs(be.gapPct).toFixed(2)}%`);
         const gapCls = (be.gapPct !== null && be.gapPct !== undefined && be.gapPct < 0) ? "text-red" : "text-green";
         beHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorBreakeven">
             <div class="ideal-title">5% 回本测算</div>
             <div class="ideal-sub">实际口径 · 按真实持仓成本 ÷ 份额计算，与加仓模式无关</div>
             <div class="be-grid">
@@ -2622,13 +2684,13 @@
           </div>`;
       } else if (records.length) {
         beHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorBreakeven">
             <div class="ideal-title">5% 回本测算</div>
             <div class="ideal-sub">当前无持仓（本轮已止盈离场或份额已清空），重新建仓后按真实持仓计算回本价</div>
           </div>`;
       } else {
         beHtml = `
-          <div class="detail-card">
+          <div class="detail-card jump-anchor" id="anchorBreakeven">
             <div class="ideal-title">5% 回本测算</div>
             <div class="ideal-sub">待建仓后生成（录入第一笔买入后按真实持仓计算回本价）</div>
           </div>`;
@@ -2665,8 +2727,7 @@
               </div>
             </div>
           </div>
-${idealHtml}
-${beHtml}
+${jumpNavHtml}
           <div class="detail-card">
             <div class="profit-section" style="margin-bottom:0;">
               <div class="profit-header">
@@ -2720,7 +2781,10 @@ ${beHtml}
           <div class="records-section">
             <div class="records-title">减仓记录</div>
             ${reductionsHtml}
-          </div>`;
+          </div>
+
+${idealHtml}
+${beHtml}`;
       /* 回本测算卡：成交价输入 → 实时精算修正买入金额（前端本地计算，不请求后端） */
       const beInput = document.getElementById("bePriceInput");
       if (beInput) {
@@ -3321,6 +3385,8 @@ ${beHtml}
         }
         if (type === "delete-record") deleteRecord(Number(action.dataset.index));
         if (type === "delete-reduction") deleteReduction(Number(action.dataset.index));
+        if (type === "jump-ideal") scrollToCard("anchorIdeal");
+        if (type === "jump-breakeven") scrollToCard("anchorBreakeven");
       });
       document.querySelectorAll(".modal-overlay").forEach((ov) => {
         ov.addEventListener("click", () => {
