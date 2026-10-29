@@ -2518,7 +2518,8 @@
       els.detailSubtitle.textContent = fund.code || "";
       els.btnNextFund.style.visibility = state.funds.length > 1 ? "visible" : "hidden";
       const firstChange = Number(s.firstBuyChange || 0);
-      const recordsHtml = records.length ? records.map((record, index) => `
+      const recordsView = records.map((record, index) => ({ record, index })).reverse();
+      const recordsHtml = recordsView.length ? recordsView.map(({ record, index }) => `
           <div class="record-card">
             <div class="record-info">
               <div class="record-index">第 ${index + 1} 份</div>
