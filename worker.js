@@ -6,6 +6,9 @@
 const KV_KEY = "store";
 const SETTINGS_KEY = "settings";
 const CRON_LAST_KEY = "cron:last"; // 定时任务最近一次执行结果（官方无失败告警，自行留痕自查）
+/* 允许用只读 API Key 免登录访问的接口白名单（仅 GET，见 fetch 门禁）。
+   两者都不含提示词以外的写操作；新增只读接口必须显式加进这里，默认一律走 Cookie 门禁。 */
+const READONLY_KEY_PATHS = ["/api/llm-context", "/api/data"];
 
 /* ---------------- 策略参数（与 PHP 版默认值一致） ----------------
    LOSS_COEF  折损系数：净值跌到上一笔的 96% 触发下一笔买入
@@ -1131,6 +1134,34 @@ async function handle(path, method, url, request, env, ctx) {
     return json({ success: true });
   }
 
+  /* 只读数据快照：纯 JSON，无提示词、无加工字段，格式与导入接口对齐（取 .data 即可直接回灌）。
+     ?scope=current（默认）→ 仅当前账户，等价于 /api/export，可 POST 给 /api/import
+     ?scope=all            → 整库全部账户，可 POST 给 /api/import-all
+     不含 settings（加仓模式 / Webhook 地址），避免只读通道外泄配置。 */
+  if (path === "/api/data" && method === "GET") {
+    const scope = (url.searchParams.get("scope") || "current").trim();
+    if (scope !== "current" && scope !== "all") {
+      return json({ success: false, message: "scope 仅支持 current / all" }, 400);
+    }
+    const store = await loadStore(env);
+    const exportedAt = nowIso();
+    const data = scope === "all"
+      ? {
+          accounts: store.accounts,
+          currentAccount: store.currentAccount,
+          fundsByAccount: store.fundsByAccount,
+          exportedAt,
+          scope,
+        }
+      : {
+          account: store.currentAccount,
+          funds: currentFunds(store),
+          exportedAt,
+          scope,
+        };
+    return json({ success: true, data });
+  }
+
   if (path === "/api/export" && method === "GET") {
     const store = await loadStore(env);
     return json({
@@ -1231,9 +1262,9 @@ export default {
     if (path === "/api/logout" && method === "POST") return handleLogout(request, env);
     if (path === "/api/change-password" && method === "POST") return handleChangePassword(request, env);
 
-    // 只读例外：GET /api/llm-context 允许用 API Key 免登录抓取（需配置 Secret LLM_CONTEXT_KEY）。
-    // 仅此一个只读接口；密钥缺失/不匹配时什么都不做，继续走下面的统一 Cookie 门禁。
-    if (path === "/api/llm-context" && method === "GET" && isLlmKeyAuthed(request, env, url)) {
+    // 只读例外：白名单内的 GET 接口允许用 API Key 免登录抓取（需配置 Secret LLM_CONTEXT_KEY）。
+    // 白名单见 READONLY_KEY_PATHS；密钥缺失/不匹配时什么都不做，继续走下面的统一 Cookie 门禁。
+    if (method === "GET" && READONLY_KEY_PATHS.includes(path) && isLlmKeyAuthed(request, env, url)) {
       try {
         return cors(await handle(path, method, url, request, env, ctx));
       } catch (e) {

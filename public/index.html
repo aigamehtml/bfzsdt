@@ -3179,7 +3179,7 @@ ${beHtml}`;
         <div class="set-card">
           <div class="set-card-title">数据备份</div>
           <div class="set-row"><span>数据存储位置</span><b style="font-size:11px">Cloudflare KV（云端）</b></div>
-          <div class="set-mini">免费额度不保证数据安全，请定期导出备份 JSON。</div>
+          <div class="set-mini">免费额度不保证数据安全，请定期导出备份 JSON。这里的「导出备份」只含当前账户；要一次拿全部账户可用 /api/data?scope=all（需配 API Key，见 README）。</div>
           <div class="set-btn-row">
             <button class="set-btn" id="btnSettingsExport">导出备份</button>
             <button class="set-btn ghost" id="btnSettingsImport">导入恢复</button>

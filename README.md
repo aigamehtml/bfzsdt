@@ -34,9 +34,9 @@
 - **真实持仓口径**：回本价 = 总成本 ÷ 总份额（非经验法则的「最新价 × 1.05」），支持部分减仓后的剩余持仓
 - **多账户隔离**：一个密码下可建多个账户（如「主力 / 实验」），数据互不可见
 - **每日净值刷新**：对接东方财富公开接口，支持手动单只 / 全部刷新，并内置定时任务每日 00:05（北京）自动刷新全部账户；净值日期按北京时间归属
-- **数据自主**：JSON 导入 / 导出（含全量账户），数据永远属于你自己
+- **数据自主**：JSON 导入 / 导出；设置页导出当前账户，`/api/data?scope=all` 可拿整库全量，数据永远属于你自己
 - **信号邮件推送**：配置 Webhook 后，新加仓 / 止盈信号自动推送（异步、失败静默，不阻塞页面）
-- **LLM 上下文导出**：`/api/llm-context` 一键导出当前持仓与信号的文本快照，方便让 AI 帮你解读；可选配只读 API Key，让外部 AI 工具 / 脚本免登录直接抓取
+- **LLM 上下文导出**：`/api/llm-context` 一键导出当前持仓与信号的文本快照，方便让 AI 帮你解读；另有 `/api/data` 输出无提示词的纯数据备份（可选整库）；两者可配只读 API Key 供外部工具免登录抓取
 - **移动端适配**：单文件 SPA，375px 起可用，首页卡片、回本测算卡均为小屏优先布局
 
 ## 三、技术架构
@@ -49,7 +49,7 @@
    ▼
 Cloudflare Worker（worker.js）  ◄── Cron Trigger（每日 00:05 北京 = 16:05 UTC，自动刷新净值）
    ├── 门禁：会话 Cookie（dt_session，7 天有效，SHA-256 令牌）
-   │        例外：GET /api/llm-context 可用 API Key 免登录（Secret LLM_CONTEXT_KEY，只读）
+   │        例外：GET /api/llm-context · /api/data 可用 API Key 免登录（Secret LLM_CONTEXT_KEY，白名单只读）
    ├── API：/api/state · /api/funds · /api/records · /api/reductions · /api/settings …
    ├── 计算：信号引擎 / 阶梯表 / 回本精算（纯函数，与前端公式一致）
    ├── 外部依赖：东方财富净值接口 · 用户自配 Webhook（信号推送）
@@ -70,7 +70,7 @@ Cloudflare Worker（worker.js）  ◄── Cron Trigger（每日 00:05 北京 =
 
 ```
 bfzsdt/
-├── worker.js            # 后端 + 静态托管 + KV 读写 + 定时任务（单文件，1301 行）
+├── worker.js            # 后端 + 静态托管 + KV 读写 + 定时任务（单文件，1332 行）
 ├── public/
 │   └── index.html       # 前端 SPA（结构 + 样式 + 逻辑，单文件）
 ├── wrangler.toml        # Workers 配置（Worker 名 / KV 绑定 / 静态资源 / 定时任务 cron / Secret 说明）
@@ -178,7 +178,8 @@ npx wrangler dev          # 本地起服务（默认 http://localhost:8787）
 ### 数据刷新与备份
 
 - 「刷新数据」逐只更新净值；「全部刷新」一次更新当前账户全部基金；
-- 设置页「导出数据」下载 JSON（含全部账户）；「导入数据」支持单账户 / 全量两种格式；
+- 设置页「导出数据」下载的是**当前账户**的 JSON（文件名含账户名）；「导入数据」支持单账户 / 全量两种格式；
+- **整库备份**：设置页导出只覆盖当前账户。要一次拿全所有账户，用 `GET /api/data?scope=all`（见「纯数据快照」）；
 - **建议定期导出备份**：KV 中的数据仅存于 Cloudflare，本地留一份最稳妥。
 
 ### 定时任务（自动刷新净值）
@@ -217,9 +218,16 @@ npx wrangler kv key get --binding=STORE cron:last       # 最近一次执行结�
 
 设置页填入 Webhook 地址（Zoho Mail webhook，`http(s)://` 开头），保存后可发一封测试邮件验证。配置后，每次打开首页检测到**新的**加仓 / 止盈信号即自动推送（异步执行、失败静默，不影响页面）；同一信号（按「信号类型 + 净值日期」去重）只推一次，不会反复轰炸。**定时任务只负责刷新净值，不再触发推送**。接口契约：POST JSON（`subject` / `content` / `summary` / `message`），成功判据为 HTTP 200 且响应体含 `"code":200`。
 
-### LLM 上下文
+### 对外只读数据接口（LLM 上下文 / 纯数据快照）
 
-`GET /api/llm-context` 返回当前账户全部持仓、信号、精算金额与内置提示词的快照，`?format=text` 为纯文本，缺省为 JSON。两种访问方式：
+两个接口共用同一把 API Key，都只放行 `GET`，都只读。区别只在**内容**：
+
+| 接口 | 内容 | 范围 | 用途 |
+|------|------|------|------|
+| `/api/llm-context` | **加工后的分析快照**（层级 / 信号 / 精算金额 / 回本价）+ **内置提示词**；`?format=text` 输出「提示词 + 数据」纯文本，缺省 JSON | 当前账户 | 直接粘贴给 AI 做策略解读 |
+| `/api/data` | **原始数据**，无提示词、无加工字段，格式与导入接口对齐，取 `data` 即可直接回灌 | **默认当前账户**；`?scope=all` 整库全部账户 | 自动备份、迁移、外部程序读原始数据 |
+
+`GET /api/llm-context` 返回当前账户全部持仓、信号、精算金额与内置提示词的快照。两种访问方式：
 
 | 方式 | 认证 | 适用场景 |
 |------|------|----------|
@@ -247,17 +255,37 @@ curl -H 'X-API-Key: <密钥>' 'https://<域名>/api/llm-context?format=text'
 curl 'https://<域名>/api/llm-context?format=text&key=<密钥>'
 ```
 
-注意事项：
+**纯数据快照 `/api/data`**：
 
-- **只放行这一个只读接口**：`/api/state`、`/api/records`、`/api/settings` 等所有其他接口仍一律要求登录 Cookie，API Key 对它们无效；且仅 `GET` 放行，`POST /api/llm-context` 仍被拦截。
+```bash
+# 默认：仅当前账户，等价于设置页「导出数据」，可直接 POST 给 /api/import
+curl -H 'X-API-Key: <密钥>' 'https://<域名>/api/data' | jq .data > backup-current.json
+
+# 整库：全部账户 + 全部基金，可直接 POST 给 /api/import-all 恢复
+curl -H 'X-API-Key: <密钥>' 'https://<域名>/api/data?scope=all' | jq .data > backup-all.json
+```
+
+返回结构（`scope=all` 时 `data` 为 `accounts` / `currentAccount` / `fundsByAccount`）：
+
+```json
+{ "success": true, "data": { "account": "主力", "funds": [ /* 原始 fund 对象 */ ], "exportedAt": "...", "scope": "current" } }
+```
+
+- **不含提示词 / 加工字段 / 设置项**：没有 `prompt`、`text`、`level`、`signal`、`breakevenPrice` 等，也不含 Webhook 地址与加仓模式；`funds` 是原始持仓对象（含 `records` / `reductions` / `stopProfitTarget`），与导入接口期望的格式一致。
+- **范围默认最小**：不带 `scope` 只给当前账户，显式 `?scope=all` 才给整库；非法值返回 400，不静默回落（避免你以为备份了全库、实际只有单账户）。
+- **可直接回灌**：`data` 部分 POST 给 `/api/import`（单账户）或 `/api/import-all`（整库）即可恢复，无需手工清洗字段；`scope` / `exportedAt` 是附加元信息，导入时会忽略。
+
+注意事项（两个接口通用）：
+
+- **白名单只读**：仅 `GET /api/llm-context` 与 `GET /api/data` 可用 API Key；`/api/state`、`/api/export`、`/api/settings` 等所有其他接口仍一律要求登录 Cookie，`POST` 到白名单路径同样被拦截。
 - **未配置 Secret 时通道关闭**：请求回落统一门禁返回 401，不会因为没有配密钥就对外敞开。
 - **密钥不落库**：Secret 由 Wrangler 注入运行时环境变量，不写入 `wrangler.toml`、KV、导出备份或前端页面；设置页不会显示它。轮换密钥重新执行 `wrangler secret put` 即可（无需改代码、无需重新部署）。
 - **`?key=` 会留在 URL 里**：可能进入浏览器历史、代理/网关访问日志与 Referer。能控制请求头时优先用 `X-API-Key`；密钥泄露后应立即轮换。
-- 该接口返回的是**当前账户**的完整持仓明细，等同于一份数据快照，密钥请按密码对待、勿公开分享。
+- `?scope=all` 会一次性给出**所有账户**的完整持仓明细，暴露面比单账户大得多，密钥请按密码对待、勿公开分享。
 
 ## 七、API 一览
 
-所有 `/api/*` 业务接口未登录均返回 401（OPTIONS 预检除外），**唯一例外**：`GET /api/llm-context` 在配置了 Secret `LLM_CONTEXT_KEY` 时可用 `X-API-Key` 头或 `?key=` 免登录访问（只读，详见「LLM 上下文」）。业务接口统一返回 `{ success, ... }`。
+所有 `/api/*` 业务接口未登录均返回 401（OPTIONS 预检除外），**例外是白名单内两个只读 GET 接口**：`/api/llm-context` 与 `/api/data` 在配置了 Secret `LLM_CONTEXT_KEY` 时可用 `X-API-Key` 头或 `?key=` 免登录访问（详见「对外只读数据接口」）。业务接口统一返回 `{ success, ... }`。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -269,7 +297,8 @@ curl 'https://<域名>/api/llm-context?format=text&key=<密钥>'
 | GET | `/api/settings` | 读取设置（加仓模式、策略参数、Webhook 脱敏地址） |
 | POST | `/api/settings` | 保存设置（`addMode` 仅接受 `ideal` / `actual`，非法值 400） |
 | POST | `/api/notify/test` | 发送测试推送邮件 |
-| GET | `/api/llm-context` | LLM 上下文快照（`?format=text` 返回纯文本）；唯一支持 API Key 免登录的接口 |
+| GET | `/api/llm-context` | LLM 上下文快照（`?format=text` 返回纯文本，含提示词）；支持 API Key 免登录 |
+| GET | `/api/data` | 纯数据快照（无提示词，原始可回灌结构）；`?scope=all` 取整库全账户；支持 API Key 免登录 |
 | POST | `/api/accounts` | 新建账户 |
 | DELETE | `/api/accounts?name=` | 删除账户（至少保留一个） |
 | POST | `/api/current-account` | 切换当前账户 |
@@ -320,7 +349,7 @@ STORE（KV namespace）
 ## 十、安全说明
 
 - 访问密码经哈希后存 KV，会话为 HttpOnly Cookie，7 天有效；
-- 可选的只读 API Key 经 Wrangler Secret 注入（不入库），用常量时间比较校验，仅放行 `GET /api/llm-context`；未配置即关闭，不会敞开数据；
+- 可选的只读 API Key 经 Wrangler Secret 注入（不入库），用常量时间比较校验，仅放行白名单内两个只读 GET（`/api/llm-context`、`/api/data`）；未配置即关闭，不会敞开数据；`/api/data` 默认只给当前账户，`?scope=all` 才给整库；
 - 本地真实持仓数据（`data/`）与 `.dev.vars` 已在 `.gitignore` 中排除，仓库只含代码；
 - 建议为 Cloudflare API Token 授予最小权限（Workers 编辑 + KV 编辑），并**在推送后及时吊销**；
 - 本项目为个人自用工具，开源仅供学习交流，请勿直接部署为公开服务（无注册体系、无多人权限模型、无审计日志）。
@@ -337,7 +366,10 @@ A：触发价是信号线（上一笔 × 0.96），双模式一致；`actual` �
 A：当前实现下，修改密码**不会**吊销已登录会话——旧 Cookie 仍有效直至 7 天自然过期。如需立即失效，请重新部署后清空 KV 中的 `auth:sess:*` 键。
 
 **Q：把 `/api/llm-context?format=text` 发给外部 AI 工具，为什么返回 401？**
-A：接口默认要求登录 Cookie，外部工具没有你的会话。在部署端执行 `npx wrangler secret put LLM_CONTEXT_KEY` 配置密钥后，用 `X-API-Key` 头或 `?key=` 携带即可免登录抓取；不配置则维持「仅登录后可用」。详见「LLM 上下文」。
+A：接口默认要求登录 Cookie，外部工具没有你的会话。在部署端执行 `npx wrangler secret put LLM_CONTEXT_KEY` 配置密钥后，用 `X-API-Key` 头或 `?key=` 携带即可免登录抓取；不配置则维持「仅登录后可用」。详见「对外只读数据接口」。
+
+**Q：设置页导出的 JSON 是全部账户吗？**
+A：不是，只含**当前账户**（文件名带账户名）。要一次拿全所有账户，用 `GET /api/data?scope=all`（需配 API Key），其 `data` 部分可直接 POST 给 `/api/import-all` 恢复。
 
 **Q：数据会丢吗？**
 A：数据存 Cloudflare KV，服务端多地冗余；但请自行定期「导出数据」留本地备份。
