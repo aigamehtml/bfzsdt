@@ -517,7 +517,7 @@ function json(body, status = 200) {
 function cors(resp) {
   resp.headers.set("Access-Control-Allow-Origin", "*");
   resp.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  resp.headers.set("Access-Control-Allow-Headers", "Content-Type");
+  resp.headers.set("Access-Control-Allow-Headers", "Content-Type, X-API-Key");
   return resp;
 }
 async function readJson(request) {
@@ -543,6 +543,30 @@ function readSessionId(request) {
   const cookie = request.headers.get("Cookie") || "";
   const m = cookie.match(new RegExp("(?:^|;\\s*)" + COOKIE_NAME + "=([^;]+)"));
   return m ? m[1] : null;
+}
+
+/* ---------------- 只读 API Key 通道（供外部工具抓取 LLM 上下文） ----------------
+   密钥来源：Worker Secret `LLM_CONTEXT_KEY`（npx wrangler secret put），
+   不写入代码库 / KV / 前端，也不随设置页或导出备份下发。
+   生效范围：仅 GET /api/llm-context 这一个只读接口；其余接口仍一律走 Cookie 会话门禁。
+   两种传参：X-API-Key 请求头（推荐，密钥不落 URL/日志）或 ?key= 查询参数（方便直接丢链接）。
+   未配置 Secret 时通道关闭，请求回落统一门禁返回 401——明确拒绝，不静默放行。 */
+function timingSafeEqual(a, b) {
+  // 常量时间比较：不因首个不同字符提前返回，避免时序侧信道
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+function isLlmKeyAuthed(request, env, url) {
+  const secret = ((env && env.LLM_CONTEXT_KEY) || "").trim();
+  if (!secret) return false;
+  // 两种传参任一匹配即通过（同时传入时不必纠结优先级；安全性不变，仍需持有正确密钥）
+  const candidates = [
+    (request.headers.get("X-API-Key") || "").trim(),
+    (url.searchParams.get("key") || "").trim(),
+  ];
+  return candidates.some((c) => c && timingSafeEqual(c, secret));
 }
 async function isAuthed(request, env) {
   const id = readSessionId(request);
@@ -1206,6 +1230,16 @@ export default {
     if (path === "/api/setup" && method === "POST") return handleSetup(request, env);
     if (path === "/api/logout" && method === "POST") return handleLogout(request, env);
     if (path === "/api/change-password" && method === "POST") return handleChangePassword(request, env);
+
+    // 只读例外：GET /api/llm-context 允许用 API Key 免登录抓取（需配置 Secret LLM_CONTEXT_KEY）。
+    // 仅此一个只读接口；密钥缺失/不匹配时什么都不做，继续走下面的统一 Cookie 门禁。
+    if (path === "/api/llm-context" && method === "GET" && isLlmKeyAuthed(request, env, url)) {
+      try {
+        return cors(await handle(path, method, url, request, env, ctx));
+      } catch (e) {
+        return cors(json({ success: false, message: "服务器错误: " + (e && e.message ? e.message : String(e)) }, 500));
+      }
+    }
 
     // 统一门禁：未登录时拦截一切
     const authed = await isAuthed(request, env);

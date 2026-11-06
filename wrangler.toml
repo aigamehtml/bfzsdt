@@ -14,6 +14,14 @@ preview_urls = false
 binding = "STORE"
 id = "f88edeb10743499b88324298364e6db6"
 
+# ===== 只读 API Key（可选，供外部 AI / 自动化工具抓取 /api/llm-context）=====
+# 密钥不写在这里（本文件会进 GitHub），用 Wrangler Secret 注入，运行时读 env.LLM_CONTEXT_KEY：
+#   npx wrangler secret put LLM_CONTEXT_KEY
+# 生成一个足够长的随机值，例如：openssl rand -hex 32
+# 本地开发可在项目根放 .dev.vars（已加入 .gitignore）：LLM_CONTEXT_KEY=xxxx
+# 不配置时该通道关闭，接口维持原有「登录后 Cookie 访问」行为，不会对外敞开。
+# 前端设置页 / 导出备份 / KV 均不包含此密钥。
+
 # 前端静态资源：与 Worker 同域部署，同源访问无需 CORS
 [assets]
 directory = "./public"

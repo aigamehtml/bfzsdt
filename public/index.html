@@ -3189,6 +3189,7 @@ ${beHtml}`;
           <div class="set-card-title">AI 分析接口</div>
           <div class="set-mini" style="margin-top:0">把全部实盘数据 + 内置提示词喂给任意大模型，获取每只基金的短期/长期止盈建议：</div>
           <div class="set-url mono">${location.origin}/api/llm-context?format=text</div>
+          <div class="set-mini">此链接需登录后才能访问；若要让外部 AI 工具/脚本免登录抓取，需在部署端配置只读 API Key（见 README「LLM 上下文」），密钥不会显示在这里。</div>
           <div class="set-btn-row">
             <button class="set-btn" id="btnCopyLlm">复制提示词+数据</button>
             <button class="set-btn ghost" id="btnOpenLlm">打开文本</button>

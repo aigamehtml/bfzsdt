@@ -27,3 +27,5 @@ public/备份1.html
 Thumbs.db
 .env
 .env.*
+.dev.vars
+.dev.vars.*
