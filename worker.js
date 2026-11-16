@@ -24,6 +24,14 @@ const REBOUND_COEF = 1.05;
 const REBOUND_GAP = REBOUND_COEF - 1; // 0.05
 /* 加仓模式：ideal=理想阶梯（上一笔×0.96，默认）；actual=实际 5% 回本约束反推买入价 */
 const ADD_MODES = ["ideal", "actual"];
+/* 默认止盈目标（百分比）：仅在新建基金且未指定目标净值时用于换算初始目标净值 */
+const DEFAULT_TP_PCT = 20;
+
+/* 净值抓取超时（ms）与定时任务并发度。
+   东财接口偶发挂起，不设上限时单只挂起会把整轮拖到超时被终止，
+   导致「已跑完的账户也没保存」——定时任务不更新全部账户的根因之一。 */
+const FETCH_TIMEOUT_MS = 8000;
+const CRON_CONCURRENCY = 3;
 function normalizeAddMode(m) {
   return ADD_MODES.includes(m) ? m : "ideal";
 }
@@ -79,6 +87,12 @@ function toInt(v, def = 0) {
   } catch {
     return def;
   }
+}
+/* 四舍五入到 4 位小数（净值口径统一精度） */
+function round4(v) {
+  const n = toFloat(v);
+  if (!isFinite(n)) return 0;
+  return Math.round(n * 10000) / 10000;
 }
 function generateColor(name) {
   let h = 0;
@@ -345,6 +359,56 @@ function getFirstBuyChange(fund) {
    排序（sortKey 三元素 [组号, 0, 组内值]，cmpKey 逐元素升序）：
    组 0 止盈（收益率高的在前）｜组 1 触发买入（超跌幅度大的在前，跌得越深越紧急）
    组 2 持有中（距触发买入越近越前）｜组 3 弹药用尽｜组 4 沉底（待重开/待建仓/请同步） */
+/* ---------------- 止盈目标（目标净值口径） ----------------
+   2026-11-17 起止盈目标以「目标净值」为准（fund.stopProfitNav，4 位小数），
+   百分比由平均成本派生：pct = (nav / avgCost − 1) × 100。
+   存量数据只有 stopProfitTarget（百分比，默认 20）：读取时按平均成本反推目标净值，
+   不落盘（等用户下次保存时写回），因此老数据无需迁移即可按原目标继续止盈。
+   未持仓（份额 0，如刚止盈离场）算不出平均成本 → nav 为 null，只保留百分比口径。 */
+function stopProfitInfo(fund) {
+  const profit = calculateProfit(fund);
+  const avgCost = profit.totalShares > 0 ? profit.totalCost / profit.totalShares : 0;
+  const legacyPct = toFloat(fund.stopProfitTarget, 20);
+  let nav = round4(fund.stopProfitNav);
+  if (!(nav > 0) && avgCost > 0) nav = round4(avgCost * (1 + legacyPct / 100));
+  if (!(nav > 0)) nav = null;
+  let pct = null;
+  if (nav !== null && avgCost > 0) pct = Math.round((nav / avgCost - 1) * 10000) / 100;
+  else if (nav === null) pct = Math.round(legacyPct * 100) / 100;
+  /* 目标市值：目标净值 × 持仓份额；无持仓时回退「成本 × (1+百分比)」 */
+  let targetMV = null;
+  if (nav !== null && profit.totalShares > 0) targetMV = Math.round(nav * profit.totalShares * 100) / 100;
+  else if (profit.totalCost > 0) targetMV = Math.round(profit.totalCost * (1 + legacyPct / 100) * 100) / 100;
+  return { nav, pct, targetMV, avgCost: avgCost > 0 ? Math.round(avgCost * 10000) / 10000 : null };
+}
+/* 由「目标净值」给出百分比（4 位精度，四舍五入到 2 位）；avgCost 无效时返回 null */
+function navToPct(nav, avgCost) {
+  if (!(nav > 0) || !(avgCost > 0)) return null;
+  return Math.round((nav / avgCost - 1) * 10000) / 100;
+}
+/* 由「百分比」给出目标净值；avgCost 无效时返回 0（调用方据此拒绝或仅存百分比） */
+function pctToNav(pct, avgCost) {
+  const p = toFloat(pct, 0);
+  if (!(p > 0) || !(avgCost > 0)) return 0;
+  return round4(avgCost * (1 + p / 100));
+}
+/* 解析入参：优先净值（stopProfitNav，4 位小数），兼容旧百分比字段（stopProfitTarget）。
+   avgCost 用于另一种口径的换算；拿不到平均值时只保留原口径那个值。
+   返回 { nav, pct }，都无效时返回 null。 */
+function readStopProfitInput(data, avgCost) {
+  const navRaw = round4(toFloat(data && data.stopProfitNav, 0));
+  if (navRaw > 0) return { nav: navRaw, pct: navToPct(navRaw, avgCost) };
+  const pctRaw = toFloat(data && data.stopProfitTarget, 0);
+  if (pctRaw > 0) return { nav: pctToNav(pctRaw, avgCost), pct: Math.round(pctRaw * 100) / 100 };
+  return null;
+}
+/* 写入基金对象：净值存 stopProfitNav（主口径），百分比同步回 stopProfitTarget
+   （保留字段，导出备份 / 旧版前端 / LLM 上下文仍能读到）。 */
+function applyStopProfit(fund, input) {
+  if (!input) return;
+  if (input.nav > 0) fund.stopProfitNav = round4(input.nav);
+  if (input.pct !== null && input.pct !== undefined) fund.stopProfitTarget = Math.round(input.pct * 100) / 100;
+}
 function signalFor(fund) {
   const records = fund.records || [];
   if (!records.length) {
@@ -358,8 +422,12 @@ function signalFor(fund) {
   if (profit.totalShares <= 0) {
     return { state: "resting", label: "待重开", level: "gray", sortKey: [4, 0, 998] };
   }
-  const stopTarget = toFloat(fund.stopProfitTarget, 20);
-  if (profit.profitPercent >= stopTarget) {
+  /* 止盈判定按「目标净值」：现价 ≥ 目标净值即触发（与旧百分比口径等价，
+     因为目标净值由平均成本换算而来）。无持仓成本时回退百分比。 */
+  const tp = stopProfitInfo(fund);
+  const hitTP = (tp.nav !== null && currentPrice >= tp.nav)
+    || (tp.nav === null && profit.profitPercent >= toFloat(fund.stopProfitTarget, 20));
+  if (hitTP) {
     return { state: "take_profit", label: `触发止盈 (收益${profit.profitPercent.toFixed(2)}%)`, level: "red", sortKey: [0, 0, -profit.profitPercent] };
   }
   const lastPrice = toFloat(records[records.length - 1].price);
@@ -392,8 +460,12 @@ function fundState(fund, mode) {
   // triggerNav 口径对齐 PHP：有上一笔就给值（纯理想阶梯，与模式无关）
   const rawTrigger = (lastPrice !== null && lastPrice > 0) ? nextBuyPrice(fund) : null;
   const triggerNav = rawTrigger !== null ? Math.round(rawTrigger * 10000) / 10000 : null;
-  const stopTarget = toFloat(fund.stopProfitTarget, 20);
-  const tpTargetMV = profit.totalCost > 0 ? Math.round(profit.totalCost * (1 + stopTarget / 100) * 100) / 100 : null;
+  /* 止盈目标：净值口径（tpNav，4 位小数）+ 百分比（tpPct，由平均成本派生）。
+     两者都给，前端同时展示；无持仓时 tpNav 为 null、tpPct 取存量百分比。 */
+  const tp = stopProfitInfo(fund);
+  const tpNav = tp.nav;
+  const tpPct = tp.pct;
+  const tpTargetMV = tp.targetMV;
   const gapPct = (currentPrice > 0 && lastPrice !== null && lastPrice > 0 && triggerNav !== null)
     ? Math.round((currentPrice - triggerNav) / lastPrice * 10000) / 100 : null;
   // nextAmount 口径：未建仓也给首档金额（seq[0]），投满为 null；actual 模式为回本精算金额
@@ -414,6 +486,9 @@ function fundState(fund, mode) {
     reboundRef,
     triggerNav,
     tpTargetMV,
+    tpNav,
+    tpPct,
+    tpAvgCost: tp.avgCost,
     gapPct,
     // 实际回本（平均成本法，与模式无关，始终展示真实口径）
     breakeven: breakevenInfo(fund),
@@ -453,6 +528,30 @@ function sortFundsForView(funds, mode) {
 }
 
 /* ---------------- 东方财富抓取 ---------------- */
+/* 取净值曲线最后一个点。
+   东财 pingzhongdata 动辄几千条净值点，旧实现用 matchAll 全量扫一遍再建两个大数组，
+   在 Worker 免费版（单次调用 CPU 预算很小）里很容易把时间耗光。
+   净值曲线按日期升序、最新一根在末尾 → 只从尾部 2000 字符解析；匹配不到再回退全量扫描，
+   保证格式变化时行为不变（回退分支才会付出全量扫描的代价）。 */
+function lastTrendPoint(body) {
+  const tail = body.length > 2000 ? body.slice(-2000) : body;
+  let x = null;
+  let y = null;
+  let m;
+  const strict = /"x"\s*:\s*(\d+)\s*,\s*"y"\s*:\s*([\d.]+)/g;
+  while ((m = strict.exec(tail)) !== null) { x = toInt(m[1]); y = toFloat(m[2]); }
+  if (y !== null) return { x, y };
+  const loose = /\bx\s*:\s*(\d+)\s*,\s*y\s*:\s*([\d.]+)/g;
+  while ((m = loose.exec(tail)) !== null) { x = toInt(m[1]); y = toFloat(m[2]); }
+  if (y !== null) return { x, y };
+  /* 回退：尾部未匹配到（格式差异），按旧逻辑全量取末值 */
+  const yAll = [...body.matchAll(/"?y"?\s*:\s*([\d.]+)/g)];
+  const xAll = [...body.matchAll(/"?x"?\s*:\s*(\d+)/g)];
+  return {
+    x: xAll.length ? toInt(xAll[xAll.length - 1][1]) : null,
+    y: yAll.length ? toFloat(yAll[yAll.length - 1][1]) : null,
+  };
+}
 async function fetchFundData(code) {
   if (!/^\d{6}$/.test(code || "")) {
     return { success: false, message: "基金代码必须是 6 位数字" };
@@ -460,10 +559,16 @@ async function fetchFundData(code) {
   const url = `https://fund.eastmoney.com/pingzhongdata/${code}.js?_=${Date.now()}`;
   let text;
   try {
-    const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    /* 必须带超时：没有超时时单只基金挂起会拖到整轮 Worker 被终止 */
+    const signal = (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function")
+      ? AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      : undefined;
+    const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal });
+    if (!resp.ok) return { success: false, message: `接口返回 HTTP ${resp.status}` };
     text = await resp.text();
   } catch (exc) {
-    return { success: false, message: "请求失败: " + (exc && exc.message ? exc.message : String(exc)) };
+    const msg = exc && exc.message ? exc.message : String(exc);
+    return { success: false, message: /abort|timeout/i.test(msg) ? `请求超时（>${FETCH_TIMEOUT_MS}ms）` : "请求失败: " + msg };
   }
   const nameMatch = text.match(/fS_name\s*=\s*"([^"]+)"/);
   const trendMatch = text.match(/Data_netWorthTrend\s*=\s*\[([\s\S]*?)\];/);
@@ -473,11 +578,10 @@ async function fetchFundData(code) {
   let latestNav = 0;
   let latestDate = todayStr();
   if (trendMatch) {
-    const yValues = [...trendMatch[1].matchAll(/"y"\s*:\s*([\d.]+)/g)].map((m) => toFloat(m[1]));
-    const xValues = [...trendMatch[1].matchAll(/"x"\s*:\s*(\d+)/g)].map((m) => toInt(m[1]));
-    if (yValues.length) latestNav = yValues[yValues.length - 1];
-    if (xValues.length) {
-      let ts = xValues[xValues.length - 1];
+    const { x, y } = lastTrendPoint(trendMatch[1]);
+    if (y !== null) latestNav = y;
+    if (x !== null) {
+      let ts = x;
       if (ts > 9999999999) ts = ts / 1000;
       try {
         latestDate = shanghaiDateStr(new Date(ts * 1000));
@@ -733,7 +837,8 @@ function buildLlmContext(store, funds, addMode) {
       code: fund.code,
       name: fund.name,
       level: st.level ?? 0,
-      takeProfitPct: toFloat(fund.stopProfitTarget, 20),
+      takeProfitNav: st.tpNav ?? null,
+      takeProfitPct: st.tpPct ?? toFloat(fund.stopProfitTarget, DEFAULT_TP_PCT),
       refNav: st.refNav ?? null,
       currentNav: toFloat(fund.currentPrice) || null,
       navDate: fund.jzrq || null,
@@ -754,7 +859,7 @@ function buildLlmContext(store, funds, addMode) {
       reductions: (fund.reductions || []).map((r) => ({ date: r.reduceTime, nav: r.price, amount: r.amount, shares: r.shares })),
     };
   });
-  const prompt = "你是一位专业的基金定投策略分析助手。用户执行「百分之四定投法」：基金净值每下跌 4% 按金字塔序列加仓一笔（首投¥10 的基准序列为 10/10/10/20/40/72/129/233/419/755，随首投金额等比缩放，上限 10 笔），通过几何加仓把浮亏锁定在约 4.76% 以内；当持仓总市值 ≥ 累计成本 × (1+止盈目标%) 时止盈离场，然后等待重开新一轮。" + modeNote + "每只基金的 breakevenPrice 为实际回本价（累计成本÷持仓份额），breakevenGapPct 为现价距回本还差的涨幅（负值表示已回本）。以下是用户全部实盘数据（JSON）：\n\n{FUNDS}\n\n请对每一只基金分别给出：① 当前状态小结（层级、浮盈亏、是否触发加仓/止盈、剩余弹药）；② 短期止盈目标建议（1–3 个月，给出具体百分比与理由）；③ 长期止盈目标建议（6–12 个月，给出具体百分比与理由）；④ 风险提示。要求：止盈目标给明确百分比，区分短期与长期逻辑，最后注明「以上仅为基于历史数据的模型演算，不构成投资建议」。";
+  const prompt = "你是一位专业的基金定投策略分析助手。用户执行「百分之四定投法」：基金净值每下跌 4% 按金字塔序列加仓一笔（首投¥10 的基准序列为 10/10/10/20/40/72/129/233/419/755，10 档固定、不随首投金额缩放，上限 10 笔），通过几何加仓把浮亏锁定在约 4.76% 以内；止盈以「目标净值 takeProfitNav」为准（现价 ≥ 目标净值即离场，takeProfitPct 为由平均成本换算的等效百分比，两者同义），离场后等待重开新一轮。" + modeNote + "每只基金的 breakevenPrice 为实际回本价（累计成本÷持仓份额），breakevenGapPct 为现价距回本还差的涨幅（负值表示已回本）。以下是用户全部实盘数据（JSON）：\n\n{FUNDS}\n\n请对每一只基金分别给出：① 当前状态小结（层级、浮盈亏、是否触发加仓/止盈、剩余弹药）；② 短期止盈目标建议（1–3 个月，给出具体目标净值与等效百分比及理由）；③ 长期止盈目标建议（6–12 个月，给出具体目标净值与等效百分比及理由）；④ 风险提示。要求：止盈目标给明确目标净值（4 位小数）与百分比，区分短期与长期逻辑，最后注明「以上仅为基于历史数据的模型演算，不构成投资建议」。";
   return {
     meta: { strategy: "百分之四定投法", account: store.currentAccount, addMode: mode, exportedAt: nowIso() },
     funds: list,
@@ -978,6 +1083,10 @@ async function handle(path, method, url, request, env, ctx) {
     } catch (e) {
       return json({ success: false, message: e.message }, 400);
     }
+    /* 首笔成本即该笔成交价（份额已截断 2 位，用金额÷份额反算平均成本） */
+    const avgCost = record.shares > 0 ? record.amount / record.shares : 0;
+    const tpInput = readStopProfitInput(data, avgCost)
+      || readStopProfitInput({ stopProfitTarget: DEFAULT_TP_PCT }, avgCost);
     const fund = {
       code,
       name: fetched.name,
@@ -985,9 +1094,11 @@ async function handle(path, method, url, request, env, ctx) {
       jzrq: fetched.jzrq,
       records: [record],
       reductions: [],
-      stopProfitTarget: toInt(data.stopProfitTarget, 20),
+      stopProfitNav: 0,
+      stopProfitTarget: DEFAULT_TP_PCT,
       remark: "",
     };
+    applyStopProfit(fund, tpInput);
     funds.unshift(fund);
     await saveStore(env, store);
     return json({ success: true });
@@ -1029,7 +1140,11 @@ async function handle(path, method, url, request, env, ctx) {
     }
     if (!Array.isArray(fund.records)) fund.records = [];
     fund.records.push(record);
-    if (fund.records.length === 1) fund.stopProfitTarget = toInt(data.stopProfitTarget, 20);
+    /* 首笔补录：允许在建仓时一并设定止盈目标（净值优先，兼容旧百分比） */
+    if (fund.records.length === 1) {
+      const avgCost = record.shares > 0 ? record.amount / record.shares : 0;
+      applyStopProfit(fund, readStopProfitInput(data, avgCost));
+    }
     await saveStore(env, store);
     return json({ success: true });
   }
@@ -1054,11 +1169,19 @@ async function handle(path, method, url, request, env, ctx) {
     const code = (data.code || "").trim();
     const fund = findFund(store, code);
     if (!fund) return json({ success: false, message: "基金不存在" }, 404);
-    let target = toInt(data.stopProfitTarget, 20);
-    if (target <= 0) target = 20;
-    fund.stopProfitTarget = target;
+    const profit = calculateProfit(fund);
+    const avgCost = profit.totalShares > 0 ? profit.totalCost / profit.totalShares : 0;
+    const input = readStopProfitInput(data, avgCost);
+    if (!input || (!(input.nav > 0) && !(input.pct > 0))) {
+      return json({ success: false, message: "请输入有效的止盈目标净值" }, 400);
+    }
+    applyStopProfit(fund, input);
     await saveStore(env, store);
-    return json({ success: true });
+    return json({
+      success: true,
+      nav: fund.stopProfitNav || null,
+      pct: navToPct(fund.stopProfitNav, avgCost) !== null ? navToPct(fund.stopProfitNav, avgCost) : (input.pct ?? null),
+    });
   }
 
   if (path === "/api/reductions" && method === "POST") {
@@ -1216,37 +1339,72 @@ async function handle(path, method, url, request, env, ctx) {
 }
 
 /* ---------------- 定时任务：净值刷新 ----------------
-   只做一件事：遍历全部账户（不只是当前账户），逐只刷新净值；单只失败不影响其他。
-   信号检测与邮件推送不再由定时任务触发——改由打开看板（GET /api/state）时按需触发，
-   避免零点定时任务在无人看盘时推送打扰。 */
+   只做一件事：遍历全部账户刷新净值，不做信号推送（推送由打开看板 GET /api/state 触发）。
+
+   2026-11-17 修复「定时任务不能把所有账户的净值都更新」：
+   1) 增量落盘——每处理完一个账户立刻 saveStore。旧实现只在全部账户跑完后保存一次，
+      Worker 调用一旦在中途被终止（CPU/墙钟上限、单只基金挂起），整轮结果全丢，
+      线上表现就是「净值一个都没变」或「只变了部分账户」。
+   2) 抓取加 8s 超时（见 FETCH_TIMEOUT_MS）——单只挂起不再拖垮整轮。
+   3) 轻量解析——只取净值曲线末尾（见 lastTrendPoint），把 CPU 预算留给更多基金。
+   4) 账户内并发 3 只（CRON_CONCURRENCY），缩短墙钟时间。
+   5) 每个账户的成败明细写入 cron:last，可直接看出是哪个账户没更新。 */
+async function refreshOneFund(fund) {
+  const fd = await fetchFundData(fund.code);
+  if (!fd || !fd.success) return { ok: false, message: (fd && fd.message) || "拉取失败" };
+  if (!(toFloat(fd.dwjz) > 0)) return { ok: false, message: "净值无效" };
+  fund.name = fd.name;
+  fund.currentPrice = fd.dwjz;
+  fund.jzrq = fd.jzrq;
+  return { ok: true };
+}
 async function runScheduledNetValueRefresh(env) {
   const store = await loadStore(env);
+  const perAccount = [];
+  const errors = [];
   let total = 0;
   let ok = 0;
   let fail = 0;
-  const errors = [];
+  let saved = 0;
+
   for (const acc of store.accounts || []) {
-    for (const fund of store.fundsByAccount[acc.name] || []) {
-      total++;
-      try {
-        const fd = await fetchFundData(fund.code);
-        if (fd && fd.success) {
-          fund.name = fd.name;
-          fund.currentPrice = fd.dwjz;
-          fund.jzrq = fd.jzrq;
-          ok++;
-        } else {
-          fail++;
-          errors.push(`${fund.code} ${(fd && fd.message) || "拉取失败"}`);
-        }
-      } catch (e) {
-        fail++;
-        errors.push(`${fund.code} ${e && e.message ? e.message : String(e)}`);
-      }
+    const name = (acc && acc.name) || "";
+    if (!name || !Array.isArray(store.fundsByAccount[name])) {
+      errors.push(`账户「${name || "未命名"}」缺少基金列表，已跳过`);
+      perAccount.push({ account: name || "(未命名)", total: 0, ok: 0, fail: 0, saved: false });
+      continue;
+    }
+    const funds = store.fundsByAccount[name];
+    let accOk = 0;
+    let accFail = 0;
+    for (let i = 0; i < funds.length; i += CRON_CONCURRENCY) {
+      const batch = funds.slice(i, i + CRON_CONCURRENCY);
+      const results = await Promise.all(batch.map((f) =>
+        refreshOneFund(f).catch((e) => ({ ok: false, message: e && e.message ? e.message : String(e) }))
+      ));
+      results.forEach((r, k) => {
+        total++;
+        if (r.ok) { ok++; accOk++; }
+        else { fail++; accFail++; errors.push(`${name}/${batch[k].code} ${r.message}`); }
+      });
+    }
+    let accSaved = false;
+    try {
+      await saveStore(env, store);
+      accSaved = true;
+      saved++;
+    } catch (e) {
+      errors.push(`账户「${name}」保存失败：${e && e.message ? e.message : String(e)}`);
+    }
+    perAccount.push({ account: name, total: funds.length, ok: accOk, fail: accFail, saved: accSaved });
+  }
+  /* 账户为空（或全部被跳过）时也要落一次，避免首次部署后 store 结构没被写回 */
+  if (!saved) {
+    try { await saveStore(env, store); } catch (e) {
+      errors.push(`保存失败：${e && e.message ? e.message : String(e)}`);
     }
   }
-  await saveStore(env, store);
-  return { total, ok, fail, errors };
+  return { total, ok, fail, errors, perAccount, saved };
 }
 
 /* ---------------- 入口 ---------------- */
@@ -1307,7 +1465,8 @@ export default {
      设计要点：
      - 官方未承诺 Cron 失败重试（runtime 有 controller.noRetry()，但重试策略无文档），
        故按「失败即丢失、下个周期补」设计：逐只基金隔离错误，净值写入本身幂等，重跑无副作用；
-     - 结果留痕到 KV "cron:last"，配合 `wrangler tail` / Workers Logs 自查；
+     - 每账户刷完即落盘（增量保存），中途被终止也不会丢掉已刷好的账户；
+     - 结果留痕到 KV "cron:last"（含每账户明细），配合 `wrangler tail` / Workers Logs 自查；
      - 不主动抛出异常——抛出只会让本次运行被丢弃，异常已记录到日志与 KV。 */
   async scheduled(controller, env, ctx) {
     const cron = (controller && controller.cron) || "(未指定)";
@@ -1315,10 +1474,11 @@ export default {
     try {
       const r = await runScheduledNetValueRefresh(env);
       const tail = r.errors.length ? "：" + r.errors.join("；") : "";
-      console.log(`[cron ${cron}] 净值刷新 ${r.ok}/${r.total} 成功，${r.fail} 失败${tail}`);
+      console.log(`[cron ${cron}] 净值刷新 ${r.ok}/${r.total} 成功，${r.fail} 失败，落盘 ${r.saved} 次${tail}`);
       try {
         await env.STORE.put(CRON_LAST_KEY, JSON.stringify({
-          at, cron, outcome: "ok", total: r.total, ok: r.ok, fail: r.fail, errors: r.errors.slice(0, 10),
+          at, cron, outcome: "ok", total: r.total, ok: r.ok, fail: r.fail,
+          saved: r.saved, perAccount: r.perAccount, errors: r.errors.slice(0, 10),
         }));
       } catch { /* 留痕失败不影响主流程 */ }
     } catch (e) {

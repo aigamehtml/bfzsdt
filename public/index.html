@@ -2038,8 +2038,8 @@
       </div>
     </div>
     <div class="form-group" id="stopProfitRow">
-      <label class="form-label" for="stopProfitTarget">止盈目标 (%)</label>
-      <input class="form-input" type="number" step="1" min="5" max="100" id="stopProfitTarget" placeholder="20">
+      <label class="form-label" for="stopProfitNav">止盈目标净值 <span class="form-hint" id="stopProfitNavHint"></span></label>
+      <input class="form-input mono" type="number" step="0.0001" min="0.0001" id="stopProfitNav" placeholder="1.2000">
     </div>
     <div class="modal-actions">
       <button class="modal-btn" id="btnCancelBuy">取消</button>
@@ -2068,8 +2068,8 @@
     <h2 class="modal-title">修改止盈目标</h2>
     <p class="modal-subtitle" id="stopProfitModalSubtitle"></p>
     <div class="form-group">
-      <label class="form-label" for="newStopProfit">止盈目标 (%)</label>
-      <input class="form-input" type="number" step="1" min="5" max="100" id="newStopProfit" placeholder="20">
+      <label class="form-label" for="newStopProfit">止盈目标净值 <span class="form-hint" id="newStopProfitHint"></span></label>
+      <input class="form-input mono" type="number" step="0.0001" min="0.0001" id="newStopProfit" placeholder="1.2000">
     </div>
     <div class="modal-actions">
       <button class="modal-btn" id="btnCancelStopProfit">取消</button>
@@ -2151,6 +2151,11 @@
     let toastTimer = null;
     let stopBannerDismissedCount = -1;
     let stopBannerHits = [];
+    /* 止盈目标（净值口径）：新建基金弹窗里「目标净值」自动跟随买入价 ×(1+20%)，
+       用户手动改过（stopNavTouched=true）后不再覆盖；buyStopAvgCost 供百分比提示换算 */
+    const TP_DEFAULT_PCT = 20;
+    let buyStopAvgCost = 0;
+    let stopNavTouched = false;
 
     const $ = (id) => document.getElementById(id);
     const els = {
@@ -2182,7 +2187,8 @@
       buyAmountHint: $("buyAmountHint"),
       buyShares: $("buyShares"),
       stopProfitRow: $("stopProfitRow"),
-      stopProfitTarget: $("stopProfitTarget"),
+      stopProfitNav: $("stopProfitNav"),
+      stopProfitNavHint: $("stopProfitNavHint"),
       btnRefreshAll: $("btnRefreshAll"),
       btnNextFund: $("btnNextFund"),
       remarkModal: $("remarkModal"),
@@ -2193,6 +2199,7 @@
       stopProfitModal: $("stopProfitModal"),
       stopProfitModalSubtitle: $("stopProfitModalSubtitle"),
       newStopProfit: $("newStopProfit"),
+      newStopProfitHint: $("newStopProfitHint"),
       btnCancelStopProfit: $("btnCancelStopProfit"),
       btnConfirmStopProfit: $("btnConfirmStopProfit"),
       reduceModal: $("reduceModal"),
@@ -2245,6 +2252,33 @@
     function price(value) {
       const num = Number(value || 0);
       return num ? num.toFixed(4) : "--";
+    }
+
+    /* 止盈目标：净值为主口径（4 位小数），百分比由平均成本换算，两者同时展示。
+       nav/pct 后端已算好（summary.state.tpNav / tpPct）；这里留一份前端换算用于弹窗实时提示。 */
+    function round4(value) {
+      const num = Number(value || 0);
+      return isFinite(num) ? Math.round(num * 10000) / 10000 : 0;
+    }
+    function navToPct(nav, avgCost) {
+      const n = Number(nav || 0);
+      const c = Number(avgCost || 0);
+      if (!(n > 0) || !(c > 0)) return null;
+      return (n / c - 1) * 100;
+    }
+    function updateStopNavHint(inputEl, hintEl, avgCost) {
+      if (!inputEl || !hintEl) return;
+      const nav = Number(inputEl.value || 0);
+      const pct = navToPct(nav, avgCost);
+      if (!(nav > 0)) { hintEl.textContent = ""; return; }
+      if (pct === null) { hintEl.textContent = "（无持仓成本，暂无法换算百分比）"; return; }
+      hintEl.textContent = `≈ ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%（成本 ${Number(avgCost).toFixed(4)}）`;
+    }
+    /* 「1.1000（+10.00%）」形式的止盈目标文案；无净值口径时退回百分比 */
+    function stopProfitLabel(nav, pct) {
+      if (!(nav > 0)) return pct !== null && pct !== undefined ? `${Number(pct).toFixed(2)}%` : "--";
+      const pctTxt = (pct === null || pct === undefined) ? "" : `（${pct >= 0 ? "+" : ""}${Number(pct).toFixed(2)}%）`;
+      return `${price(nav)}${pctTxt}`;
     }
 
     function showToast(message) {
@@ -2560,9 +2594,9 @@
         const amtTag = (state.addMode === "actual" && st.nextAmount !== st.baseAmount) ? "（回本精算）" : "";
         sigDesc = `买 <b>${money(st.nextAmount)}</b> 元${amtTag}（第 ${st.level + 1} 笔）｜ 触发价 <b>${price(st.triggerNav)}</b> ｜ 现价 <b>${price(fund.currentPrice)}</b> ✓ 已跌破触发`;
       } else if (signal.state === "take_profit") {
-        sigDesc = `市值 <b>${money(st.marketValue)}</b> 元 ≥ 目标 <b>${money(st.tpTargetMV)}</b> 元 ｜ 收益率 <b>${Number(st.returnRate || 0) >= 0 ? "+" : ""}${Number(st.returnRate || 0).toFixed(2)}%</b> ｜ 可记一笔卖出落袋`;
+        sigDesc = `现价 <b>${price(fund.currentPrice)}</b> ≥ 目标净值 <b>${stopProfitLabel(st.tpNav, st.tpPct)}</b> ｜ 市值 <b>${money(st.marketValue)}</b> 元 ≥ 目标 <b>${money(st.tpTargetMV)}</b> 元 ｜ 可记一笔卖出落袋`;
       } else if (signal.state === "exhausted") {
-        sigDesc = `10 笔全部投满，持有等待反弹止盈（目标 ${htmlEscape(fund.stopProfitTarget || 20)}%）`;
+        sigDesc = `10 笔全部投满，持有等待反弹止盈（目标净值 ${stopProfitLabel(st.tpNav, st.tpPct)}）`;
       } else if (signal.state === "resting") {
         sigDesc = `本轮已止盈离场，可清空买入记录后重新建仓`;
       } else if (signal.state === "init") {
@@ -2733,7 +2767,7 @@ ${jumpNavHtml}
             <div class="profit-section" style="margin-bottom:0;">
               <div class="profit-header">
                 <div class="profit-title">持仓总盈亏</div>
-                <button class="stopprofit-btn" data-action="change-stopprofit">止盈 ${htmlEscape(fund.stopProfitTarget || 20)}%</button>
+                <button class="stopprofit-btn" data-action="change-stopprofit">止盈 ${stopProfitLabel(st.tpNav, st.tpPct)}</button>
               </div>
               <div class="profit-grid">
                 <div class="profit-item">
@@ -2914,7 +2948,12 @@ ${beHtml}`;
       updateShares(); // 程序化赋值不会触发 input 事件，手动算一次份额
       if (records.length === 0) {
         els.stopProfitRow.style.display = "block";
-        els.stopProfitTarget.value = fund.stopProfitTarget || 20;
+        /* 新基金：按首笔成交价 ×(1+20%) 预填目标净值（4 位小数），用户可手改 */
+        const base = Number(els.buyPrice.value || 0);
+        buyStopAvgCost = base;
+        stopNavTouched = false;
+        els.stopProfitNav.value = base > 0 ? round4(base * (1 + TP_DEFAULT_PCT / 100)).toFixed(4) : "";
+        updateStopNavHint(els.stopProfitNav, els.stopProfitNavHint, base);
       } else {
         els.stopProfitRow.style.display = "none";
       }
@@ -2949,16 +2988,26 @@ ${beHtml}`;
 
     function openStopProfitModal(fund) {
       els.stopProfitModalSubtitle.textContent = fund.name || "";
-      els.newStopProfit.value = fund.stopProfitTarget || 20;
+      const st = (fund.summary && fund.summary.state) || {};
+      /* 目标净值：后端 tpNav 优先；老数据后端已按平均成本换算好，直接填净值 */
+      const nav = Number(st.tpNav || 0);
+      const avgCost = Number(st.tpAvgCost || 0);
+      els.newStopProfit.value = nav > 0 ? nav.toFixed(4) : "";
+      els.newStopProfit.dataset.avgCost = String(avgCost);
+      updateStopNavHint(els.newStopProfit, els.newStopProfitHint, avgCost);
       openModal("stopProfitModal");
     }
 
     async function confirmStopProfit() {
-      const target = Number(els.newStopProfit.value || 20);
+      const nav = Number(els.newStopProfit.value || 0);
+      if (!(nav > 0)) {
+        showToast("请输入有效的止盈目标净值");
+        return;
+      }
       try {
         await api("/api/stop-profit", {
           method: "POST",
-          body: { code: activeFundCode, stopProfitTarget: target }
+          body: { code: activeFundCode, stopProfitNav: round4(nav) }
         });
         closeModal("stopProfitModal");
         await loadState();
@@ -3025,7 +3074,8 @@ ${beHtml}`;
         price: Number(els.buyPrice.value),
         amount: Number(els.buyAmount.value || 0),
         shares: Number(els.buyShares.value || 0),
-        stopProfitTarget: Number(els.stopProfitTarget.value || 20)
+        // 止盈目标按净值提交；老接口仍兼容 stopProfitTarget 百分比
+        stopProfitNav: round4(els.stopProfitNav.value || 0)
       };
       if (!payload.price || payload.price <= 0) {
         showToast("请输入有效价格");
@@ -3340,7 +3390,22 @@ ${beHtml}`;
       $("btnCancelBuy").addEventListener("click", closeBuyModal);
       $("btnConfirmBuy").addEventListener("click", confirmBuy);
       els.buyAmount.addEventListener("input", updateShares);
-      els.buyPrice.addEventListener("input", updateShares);
+      els.buyPrice.addEventListener("input", () => {
+        updateShares();
+        /* 新基金：买入价变了且用户没手动改过目标净值 → 目标净值跟随 ×(1+20%) */
+        if (els.stopProfitRow.style.display === "none" || stopNavTouched) return;
+        const base = Number(els.buyPrice.value || 0);
+        buyStopAvgCost = base;
+        els.stopProfitNav.value = base > 0 ? round4(base * (1 + TP_DEFAULT_PCT / 100)).toFixed(4) : "";
+        updateStopNavHint(els.stopProfitNav, els.stopProfitNavHint, base);
+      });
+      els.stopProfitNav.addEventListener("input", () => {
+        stopNavTouched = true;
+        updateStopNavHint(els.stopProfitNav, els.stopProfitNavHint, buyStopAvgCost);
+      });
+      els.newStopProfit.addEventListener("input", () => {
+        updateStopNavHint(els.newStopProfit, els.newStopProfitHint, Number(els.newStopProfit.dataset.avgCost || 0));
+      });
       els.newFundCode.addEventListener("keydown", (e) => { if (e.key === "Enter") addFund(); });
       els.newAccountName.addEventListener("keydown", (e) => { if (e.key === "Enter") addAccount(); });
       els.accountList.addEventListener("click", (e) => {
