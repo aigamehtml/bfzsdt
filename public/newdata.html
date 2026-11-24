@@ -191,7 +191,6 @@
     const LABEL_IDLE = "刷新数据";
     const LABEL_BUSY = "更新中…";
     let busy = false;
-    let resetTimer = null;
 
     function esc(s) {
       return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -226,14 +225,12 @@
       btn.className = "btn" + (cls ? " " + cls : "");
       btn.textContent = text;
       btn.disabled = !!disabled;
+      /* 结果态文字保留不自动复原，但仍可点击再刷一次 */
+      btn.title = cls && cls !== "is-loading" ? "点击可再次刷新" : "";
     }
 
-    function scheduleReset(ms) {
-      clearTimeout(resetTimer);
-      resetTimer = setTimeout(() => {
-        setBtn("", LABEL_IDLE, false);
-        hint.textContent = "";
-      }, ms);
+    function resetBtn() {
+      setBtn("", LABEL_IDLE, false);
     }
 
     /* 账户切换 */
@@ -259,6 +256,7 @@
       sel.disabled = true;
       try {
         await api("/api/current-account", { method: "POST", body: JSON.stringify({ name }) });
+        if (!busy) resetBtn();
         hint.textContent = `已切换到「${name}」`;
       } catch (e) {
         hint.textContent = e.message || "切换失败";
@@ -268,11 +266,10 @@
       }
     });
 
-    /* 更新数据：成功不弹窗，只把按钮文字改成「已更新」 */
+    /* 更新数据：成功不弹窗，只把按钮文字改成「已更新」；结果一直保留，直到刷新页面或再次点击 */
     btn.addEventListener("click", async () => {
       if (busy) return;
       busy = true;
-      clearTimeout(resetTimer);
       setBtn("is-loading", LABEL_BUSY, true);
       hint.textContent = "";
       try {
@@ -280,21 +277,20 @@
         const ok = Number(r.ok || 0);
         const fail = Number(r.fail || 0);
         if (fail > 0 && ok > 0) {
-          setBtn("is-warn", "部分失败", true);
+          setBtn("is-warn", "部分失败", false);
           hint.textContent = `${ok} 只已更新，${fail} 只失败 · ${clockText()}`;
         } else if (fail > 0 || ok === 0) {
-          setBtn("is-error", "更新失败", true);
+          setBtn("is-error", "更新失败", false);
           hint.textContent = `没有基金更新成功 · ${clockText()}`;
         } else {
-          setBtn("is-done", "已更新", true);
+          setBtn("is-done", "已更新", false);
           hint.textContent = `${ok} 只基金已刷新 · ${clockText()}`;
         }
       } catch (e) {
-        setBtn("is-error", "更新失败", true);
+        setBtn("is-error", "更新失败", false);
         hint.textContent = e.message || "请稍后重试";
       } finally {
         busy = false;
-        scheduleReset(2800);
       }
     });
 
