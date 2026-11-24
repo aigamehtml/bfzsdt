@@ -34,10 +34,12 @@
 - **回本测算卡**：输入实际成交价，实时反推「从该价买入多少，才能涨 5% 回本」，支持偏离场景的金额决策
 - **真实持仓口径**：回本价 = 总成本 ÷ 总份额（非经验法则的「最新价 × 1.05」），支持部分减仓后的剩余持仓
 - **多账户隔离**：一个密码下可建多个账户（如「主力 / 实验」），数据互不可见
-- **每日净值刷新**：对接东方财富公开接口，支持手动单只 / 全部刷新，并内置定时任务每日 00:05（北京）自动刷新全部账户；净值日期按北京时间归属
+- **净值刷新**：对接东方财富公开接口，支持手动单只 / 全部刷新（定时任务已于 2026-11-25 停用）；净值日期按北京时间归属，并同步记录当日涨跌幅
 - **数据自主**：JSON 导入 / 导出；设置页导出当前账户，`/api/data?scope=all` 可拿整库全量，数据永远属于你自己
 - **信号邮件推送**：配置 Webhook 后，新加仓 / 止盈信号自动推送（异步、失败静默，不阻塞页面）
 - **LLM 上下文导出**：`/api/llm-context` 一键导出当前持仓与信号的文本快照，方便让 AI 帮你解读；另有 `/api/data` 输出无提示词的纯数据备份（可选整库）；两者可配只读 API Key 供外部工具免登录抓取
+- **首页日涨跌幅**：基金卡片现价旁显示净值日涨跌幅（涨红跌绿），净值日期是当天显示「今日」、否则「昨日」
+- **精简运维页**：`/newdata` 只有「切换账户 + 更新数据」两件事，更新成功不弹窗、按钮文字变「已更新」
 - **移动端适配**：单文件 SPA，375px 起可用，首页卡片、回本测算卡均为小屏优先布局
 
 ## 三、技术架构
@@ -48,7 +50,7 @@
 浏览器（public/index.html，vanilla JS SPA）
    │  同域请求 /api/*
    ▼
-Cloudflare Worker（worker.js）  ◄── Cron Trigger（每日 00:05 北京 = 16:05 UTC，自动刷新净值）
+Cloudflare Worker（worker.js）  ◄── 手动刷新（首页 / 详情页 / 精简页 /newdata）
    ├── 门禁：会话 Cookie（dt_session，7 天有效，SHA-256 令牌）
    │        例外：GET /api/llm-context · /api/data 可用 API Key 免登录（Secret LLM_CONTEXT_KEY，白名单只读）
    ├── API：/api/state · /api/funds · /api/records · /api/reductions · /api/settings …
@@ -71,10 +73,11 @@ Cloudflare Worker（worker.js）  ◄── Cron Trigger（每日 00:05 北京 =
 
 ```
 bfzsdt/
-├── worker.js            # 后端 + 静态托管 + KV 读写 + 定时任务（单文件，1492 行）
+├── worker.js            # 后端 + 静态托管 + KV 读写（单文件，1417 行）
 ├── public/
-│   └── index.html       # 前端 SPA（结构 + 样式 + 逻辑，单文件）
-├── wrangler.toml        # Workers 配置（Worker 名 / KV 绑定 / 静态资源 / 定时任务 cron / Secret 说明）
+│   ├── index.html       # 前端 SPA（结构 + 样式 + 逻辑，单文件）
+│   └── newdata.html     # 精简运维页（切换账户 + 更新数据），由 /newdata 路由返回
+├── wrangler.toml        # Workers 配置（Worker 名 / KV 绑定 / 静态资源 / cron 已置空 / Secret 说明）
 ├── .gitignore           # 忽略 data/、.wrangler/、备份包、AI 工作记忆等
 └── README.md
 ```
@@ -200,45 +203,46 @@ npx wrangler dev          # 本地起服务（默认 http://localhost:8787）
 - **整库备份**：设置页导出只覆盖当前账户。要一次拿全所有账户，用 `GET /api/data?scope=all`（见「纯数据快照」）；
 - **建议定期导出备份**：KV 中的数据仅存于 Cloudflare，本地留一份最稳妥。
 
-### 定时任务（自动刷新净值）
+### 手动刷新净值（定时任务已停用）
 
-已内置 Cron Trigger：每日 **00:05（北京）** 自动刷新全部账户的基金净值。定时任务只刷净值，**不做信号推送**——信号推送改由打开看板（`GET /api/state`）时按需触发（见下方「信号邮件推送」）。
+**2026-11-25 起不再有每日自动刷新**：`worker.js` 已移除 `scheduled()`，`wrangler.toml` 的 `[triggers] crons` 已置空。净值更新改为手动触发：
 
-- 配置在 `wrangler.toml`：`[triggers] crons = ["5 16 * * *"]`
-- **Cron 一律按 UTC 执行，无时区配置项**：北京 = UTC+8，故 UTC 16:05 = 北京次日 00:05
-- 每天执行（含周末）：周末基金公司不更新净值，刷新结果与上一交易日一致，无副作用
-- 想改成其他时间，改 `crons` 数组即可；改动后需**最多 15 分钟**才在全网生效
-- `wrangler deploy` 会用配置里的数组整体替换线上已有的 cron
+- 看板首页「刷新数据」→ `POST /api/refresh-all`，刷新**当前账户**全部基金
+- 详情页单只刷新 → `POST /api/refresh`
+- 精简运维页 `/newdata` → 只做「切换账户 + 更新数据」两件事，适合手机上快速操作（见下节）
 
-**行为与可靠性设计**（2026-11-17 修复「部分账户净值不更新」）：
-- 遍历**全部账户**（不只是当前账户），逐只刷新；单只基金拉取失败只记错误，不影响其他基金
-- **每账户刷完立刻落盘（增量保存）**：旧实现跑完全部账户才写一次 KV，执行一旦中途被终止（Worker 调用有 CPU/墙钟上限），整轮结果全丢，表现就是「一个账户都没更新」或「只更新了一部分」
-- **抓取带 8 秒超时**：东财接口偶发挂起，旧实现无超时，单只挂起会拖到整轮被终止
-- **净值曲线只解析末尾**：`pingzhongdata` 有数千条净值点，旧实现全量正则扫两遍很吃 CPU；净值按日期升序、最新点在末尾，改为只取尾部 2000 字符（匹配不到才回退全量）
-- **账户内并发 3 只**，缩短整体耗时
-- 官方未承诺 Cron 失败重试（`controller.noRetry()` 存在但重试策略无文档），故按「失败即丢失、下个周期补」设计：任务自身幂等，异常内部兜底并记录，不向外抛出
-- 每次执行结果写入 KV 键 `cron:last`，**含每账户明细**（`perAccount: [{account,total,ok,fail,saved}]`），可直接看出是哪个账户没更新
+> 想恢复自动刷新：`wrangler.toml` 里把 `crons` 改回 `["5 16 * * *"]`（UTC 16:05 = 北京次日 00:05），并在 `worker.js` 里重新实现 `scheduled()`。注意只删代码不删配置**不会**停掉线上 cron——必须显式写 `crons = []` 才会清除。
 
-**本地测试**：
+刷新行为说明：
+- 遍历当前账户全部基金，逐只隔离错误：单只失败只记入结果，不影响其他基金
+- 抓取带 **8 秒超时**（东财接口偶发挂起，无超时会把整个请求拖到被终止）
+- 净值曲线只解析**末尾 2000 字符**（`pingzhongdata` 有数千个点，全量正则很吃 CPU）
+- 响应返回 `{ total, ok, fail, results: [{code, ok, dayChange?|message?}] }`，可直接看出哪只失败、原因是什么
+- 每次刷新会把「净值日涨跌幅」一并写入，首页卡片直接展示
 
-```bash
-npx wrangler dev --test-scheduled
-curl "http://localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*&format=json"
-# 返回 {"outcome":"ok","noRetry":false}
-```
+### 精简运维页 `/newdata`
 
-**线上排查**：
+访问 `https://<域名>/newdata`（需登录，与主站共用会话）只有一个极简页面：
 
-```bash
-npx wrangler tail dingtou-worker --format pretty        # 实时日志
-npx wrangler kv key get --binding=STORE cron:last       # 最近一次执行结果
-```
+| 功能 | 说明 |
+|------|------|
+| 切换账户 | 下拉选择，选中即生效，提示「已切换到「账户名」」 |
+| 更新数据 | 刷新当前账户全部基金净值。**不弹提示框**，成功时按钮文字由「刷新数据」变为「已更新」，约 2.8 秒后自动复原 |
 
-也可在 Cloudflare 面板 → 该 Worker → Settings → Trigger Events → View events 查看最近 100 次调用。
+按钮文案随结果变化，避免手机上被弹窗打断：
+
+| 结果 | 按钮文字 | 按钮下方说明 |
+|------|----------|--------------|
+| 进行中 | 更新中… | — |
+| 全部成功 | 已更新 | `N 只基金已刷新 · 时:分` |
+| 部分失败 | 部分失败 | `N 只已更新，M 只失败 · 时:分` |
+| 全部失败 / 请求异常 | 更新失败 | 具体原因 |
+
+> 页面本体是 `public/newdata.html`，由 Worker 在 `/newdata` 路由改写返回；未登录访问会落到登录页，不会暴露内容。
 
 ### 信号邮件推送
 
-设置页填入 Webhook 地址（Zoho Mail webhook，`http(s)://` 开头），保存后可发一封测试邮件验证。配置后，每次打开首页检测到**新的**加仓 / 止盈信号即自动推送（异步执行、失败静默，不影响页面）；同一信号（按「信号类型 + 净值日期」去重）只推一次，不会反复轰炸。**定时任务只负责刷新净值，不再触发推送**。接口契约：POST JSON（`subject` / `content` / `summary` / `message`），成功判据为 HTTP 200 且响应体含 `"code":200`。
+设置页填入 Webhook 地址（Zoho Mail webhook，`http(s)://` 开头），保存后可发一封测试邮件验证。配置后，每次打开首页检测到**新的**加仓 / 止盈信号即自动推送（异步执行、失败静默，不影响页面）；同一信号（按「信号类型 + 净值日期」去重）只推一次，不会反复轰炸。**定时任务已停用，推送只在打开看板时触发**。接口契约：POST JSON（`subject` / `content` / `summary` / `message`），成功判据为 HTTP 200 且响应体含 `"code":200`。
 
 ### 对外只读数据接口（LLM 上下文 / 纯数据快照）
 
@@ -254,7 +258,7 @@ npx wrangler kv key get --binding=STORE cron:last       # 最近一次执行结�
 | 方式 | 认证 | 适用场景 |
 |------|------|----------|
 | 浏览器登录后访问 / 设置页「复制提示词+数据」 | 会话 Cookie（`dt_session`） | 人工操作，前端自动带 Cookie |
-| 外部程序直接抓 URL | **API Key**（`X-API-Key` 头或 `?key=` 参数） | 喂给 AI 工具、自动化脚本、定时任务 |
+| 外部程序直接抓 URL | **API Key**（`X-API-Key` 头或 `?key=` 参数） | 喂给 AI 工具、自动化脚本 |
 
 **API Key 配置**（可选，不配置则接口维持「仅登录后 Cookie 可访问」）：
 
@@ -334,7 +338,7 @@ curl -H 'X-API-Key: <密钥>' 'https://<域名>/api/data?scope=all' | jq .data >
 | POST | `/api/reductions` | 记一笔减仓（份额不得超过持仓） |
 | DELETE | `/api/reductions?code=&index=` | 删除一笔减仓 |
 | POST | `/api/refresh` | 刷新单个基金净值 |
-| POST | `/api/refresh-all` | 刷新当前账户全部基金净值 |
+| POST | `/api/refresh-all` | 刷新当前账户全部基金净值，返回 `{total,ok,fail,results}`（含每只的 `dayChange` 或失败原因） |
 | GET | `/api/export` | 导出当前账户 JSON |
 | POST | `/api/import` | 导入单账户数据（覆盖当前账户） |
 | POST | `/api/import-all` | 导入全量数据（账户 + 基金，整体覆盖） |
@@ -365,7 +369,7 @@ STORE（KV namespace）
 ├── settings    # { addMode: "ideal" | "actual", zohoWebhookUrl: string }
 ├── auth:pwd    # 密码哈希（SHA-256 直算，无盐；个人自用工具，勿存敏感密码）
 ├── auth:sess:*    # 会话令牌，TTL 7 天
-└── cron:last  # 定时任务最近一次执行结果（at/cron/outcome/total/ok/fail/errors）
+└── cron:last  # 历史遗留键（定时任务已停用，仅旧数据残留，可忽略或删除）
 ```
 
 ## 十、安全说明

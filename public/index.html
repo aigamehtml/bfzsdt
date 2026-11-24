@@ -442,6 +442,21 @@
       font-family: ui-monospace, monospace;
     }
 
+    /* 净值日涨跌幅（跟在现价后面）：沿用 A 股习惯，涨红跌绿 */
+    .fund-change {
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      font-style: normal;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      vertical-align: 2px;
+    }
+    .fund-change.up { color: var(--danger); }
+    .fund-change.down { color: var(--primary); }
+    .fund-change.flat { color: var(--text-tertiary); }
+
     .fund-next {
       margin-top: 8px;
       padding-top: 8px;
@@ -2426,6 +2441,16 @@
           const corrTag = (state.addMode === "actual" && nextBase !== null && nextBase !== undefined && nextAmt > nextBase) ? "（回本精算）" : "";
           nextHtml = `<div class="fund-next">下一笔 <b class="mono">${money(nextAmt)}</b> 元${corrTag}（第 ${layer + 1} 笔）</div>`;
         }
+        /* 净值日涨跌幅：后端刷新净值时一并写入 fund.dayChange（%）。
+           净值日期是今天显示「今日」，否则显示「昨日」；旧数据无该字段则不显示。 */
+        const chg = fund.dayChange;
+        const hasChg = chg !== null && chg !== undefined && isFinite(Number(chg));
+        const chgVal = hasChg ? Number(chg) : 0;
+        const chgCls = !hasChg || chgVal === 0 ? "flat" : chgVal > 0 ? "up" : "down";
+        const chgLabel = fund.jzrq === today() ? "今日" : "昨日";
+        const chgHtml = hasChg
+          ? `<i class="fund-change ${chgCls}">${chgLabel} ${chgVal > 0 ? "+" : ""}${chgVal.toFixed(2)}%</i>`
+          : "";
         return `
             <article class="fund-card level-${level}" data-code="${htmlEscape(fund.code)}">
               <div class="fund-card-head">
@@ -2436,7 +2461,7 @@
                 <button class="delete-btn" data-action="delete-fund" data-code="${htmlEscape(fund.code)}">删除</button>
               </div>
               <div class="fund-body">
-                <span class="fund-price mono">${price(fund.currentPrice)}</span>
+                <span class="fund-price mono">${price(fund.currentPrice)}${chgHtml}</span>
                 <span class="fund-tag ${signalClass(tagLevel)}">${htmlEscape(signal.label)}</span>
               </div>
               <div class="fund-meta-row">

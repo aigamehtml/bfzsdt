@@ -5,7 +5,6 @@
 
 const KV_KEY = "store";
 const SETTINGS_KEY = "settings";
-const CRON_LAST_KEY = "cron:last"; // 定时任务最近一次执行结果（官方无失败告警，自行留痕自查）
 /* 允许用只读 API Key 免登录访问的接口白名单（仅 GET，见 fetch 门禁）。
    两者都不含提示词以外的写操作；新增只读接口必须显式加进这里，默认一律走 Cookie 门禁。 */
 const READONLY_KEY_PATHS = ["/api/llm-context", "/api/data"];
@@ -27,11 +26,8 @@ const ADD_MODES = ["ideal", "actual"];
 /* 默认止盈目标（百分比）：仅在新建基金且未指定目标净值时用于换算初始目标净值 */
 const DEFAULT_TP_PCT = 20;
 
-/* 净值抓取超时（ms）与定时任务并发度。
-   东财接口偶发挂起，不设上限时单只挂起会把整轮拖到超时被终止，
-   导致「已跑完的账户也没保存」——定时任务不更新全部账户的根因之一。 */
+/* 净值抓取超时（ms）。东财接口偶发挂起，不设上限时单只挂起会把整个请求拖到被终止。 */
 const FETCH_TIMEOUT_MS = 8000;
-const CRON_CONCURRENCY = 3;
 function normalizeAddMode(m) {
   return ADD_MODES.includes(m) ? m : "ideal";
 }
@@ -528,29 +524,33 @@ function sortFundsForView(funds, mode) {
 }
 
 /* ---------------- 东方财富抓取 ---------------- */
-/* 取净值曲线最后一个点。
+/* 取净值曲线最后两个点（最新交易日 + 前一交易日），用于算当日涨跌幅。
    东财 pingzhongdata 动辄几千条净值点，旧实现用 matchAll 全量扫一遍再建两个大数组，
    在 Worker 免费版（单次调用 CPU 预算很小）里很容易把时间耗光。
    净值曲线按日期升序、最新一根在末尾 → 只从尾部 2000 字符解析；匹配不到再回退全量扫描，
-   保证格式变化时行为不变（回退分支才会付出全量扫描的代价）。 */
-function lastTrendPoint(body) {
-  const tail = body.length > 2000 ? body.slice(-2000) : body;
-  let x = null;
-  let y = null;
+   保证格式变化时行为不变（回退分支才会付出全量扫描的代价）。
+   返回数组，长度可能为 0/1/2，调用方自行判断。 */
+function lastTrendPoints(body) {
+  let pts = [];
   let m;
+  const tail = body.length > 2000 ? body.slice(-2000) : body;
   const strict = /"x"\s*:\s*(\d+)\s*,\s*"y"\s*:\s*([\d.]+)/g;
-  while ((m = strict.exec(tail)) !== null) { x = toInt(m[1]); y = toFloat(m[2]); }
-  if (y !== null) return { x, y };
-  const loose = /\bx\s*:\s*(\d+)\s*,\s*y\s*:\s*([\d.]+)/g;
-  while ((m = loose.exec(tail)) !== null) { x = toInt(m[1]); y = toFloat(m[2]); }
-  if (y !== null) return { x, y };
-  /* 回退：尾部未匹配到（格式差异），按旧逻辑全量取末值 */
-  const yAll = [...body.matchAll(/"?y"?\s*:\s*([\d.]+)/g)];
-  const xAll = [...body.matchAll(/"?x"?\s*:\s*(\d+)/g)];
-  return {
-    x: xAll.length ? toInt(xAll[xAll.length - 1][1]) : null,
-    y: yAll.length ? toFloat(yAll[yAll.length - 1][1]) : null,
-  };
+  while ((m = strict.exec(tail)) !== null) pts.push({ x: toInt(m[1]), y: toFloat(m[2]) });
+  if (pts.length < 2) {
+    pts = [];
+    const loose = /\bx\s*:\s*(\d+)\s*,\s*y\s*:\s*([\d.]+)/g;
+    while ((m = loose.exec(tail)) !== null) pts.push({ x: toInt(m[1]), y: toFloat(m[2]) });
+  }
+  if (pts.length >= 2) return pts.slice(-2);
+  /* 回退：尾部未匹配到（格式差异），按旧逻辑全量取末两个值 */
+  const yAll = [...body.matchAll(/"?y"?\s*:\s*([\d.]+)/g)].map((v) => toFloat(v[1]));
+  const xAll = [...body.matchAll(/"?x"?\s*:\s*(\d+)/g)].map((v) => toInt(v[1]));
+  const n = yAll.length;
+  if (!n) return [];
+  const out = [];
+  if (n >= 2) out.push({ x: xAll.length >= 2 ? xAll[n - 2] : null, y: yAll[n - 2] });
+  out.push({ x: xAll.length ? xAll[n - 1] : null, y: yAll[n - 1] });
+  return out;
 }
 async function fetchFundData(code) {
   if (!/^\d{6}$/.test(code || "")) {
@@ -577,11 +577,14 @@ async function fetchFundData(code) {
   }
   let latestNav = 0;
   let latestDate = todayStr();
+  let dayChange = null; // 最新净值相对前一交易日的涨跌幅（%），两位小数
   if (trendMatch) {
-    const { x, y } = lastTrendPoint(trendMatch[1]);
-    if (y !== null) latestNav = y;
-    if (x !== null) {
-      let ts = x;
+    const pts = lastTrendPoints(trendMatch[1]);
+    const last = pts.length ? pts[pts.length - 1] : null;
+    const prev = pts.length >= 2 ? pts[pts.length - 2] : null;
+    if (last && last.y !== null) latestNav = last.y;
+    if (last && last.x !== null) {
+      let ts = last.x;
       if (ts > 9999999999) ts = ts / 1000;
       try {
         latestDate = shanghaiDateStr(new Date(ts * 1000));
@@ -589,11 +592,25 @@ async function fetchFundData(code) {
         latestDate = todayStr();
       }
     }
+    if (last && prev && prev.y > 0 && last.y > 0) {
+      dayChange = Math.round((last.y / prev.y - 1) * 10000) / 100;
+    }
   }
   // nextAmount：新基金首笔的建议金额，避免前端另行硬编码档位表
-  return { success: true, code, name: nameMatch[1], dwjz: latestNav, jzrq: latestDate, nextAmount: getNextBuyAmount(0) };
+  return { success: true, code, name: nameMatch[1], dwjz: latestNav, jzrq: latestDate, dayChange, nextAmount: getNextBuyAmount(0) };
 }
 
+/* 把抓取结果写回基金（名称 / 净值 / 净值日期 / 当日涨跌幅）。
+   新建、单只刷新、全部刷新共用同一入口，避免三者字段不同步。 */
+function applyFetchedNav(fund, fetched) {
+  fund.name = fetched.name;
+  fund.currentPrice = fetched.dwjz;
+  fund.jzrq = fetched.jzrq;
+  if (fetched.dayChange !== null && fetched.dayChange !== undefined) {
+    fund.dayChange = fetched.dayChange;
+  }
+  return fund;
+}
 function normalizeRecord(data) {
   const price = toFloat(data.price);
   if (price <= 0) throw new Error("请输入有效价格");
@@ -1092,6 +1109,7 @@ async function handle(path, method, url, request, env, ctx) {
       name: fetched.name,
       currentPrice: fetched.dwjz,
       jzrq: fetched.jzrq,
+      dayChange: fetched.dayChange === undefined ? null : fetched.dayChange,
       records: [record],
       reductions: [],
       stopProfitNav: 0,
@@ -1236,25 +1254,26 @@ async function handle(path, method, url, request, env, ctx) {
     if (!fund) return json({ success: false, message: "基金不存在" }, 404);
     const fetched = await fetchFundData(code);
     if (!fetched.success) return json(fetched, 400);
-    fund.name = fetched.name;
-    fund.currentPrice = fetched.dwjz;
-    fund.jzrq = fetched.jzrq;
+    applyFetchedNav(fund, fetched);
     await saveStore(env, store);
     return json({ success: true });
   }
 
   if (path === "/api/refresh-all" && method === "POST") {
     const store = await loadStore(env);
+    const results = [];
     for (const fund of currentFunds(store)) {
       const fetched = await fetchFundData(fund.code);
       if (fetched.success) {
-        fund.name = fetched.name;
-        fund.currentPrice = fetched.dwjz;
-        fund.jzrq = fetched.jzrq;
+        applyFetchedNav(fund, fetched);
+        results.push({ code: fund.code, ok: true, dayChange: fund.dayChange });
+      } else {
+        results.push({ code: fund.code, ok: false, message: fetched.message || "拉取失败" });
       }
     }
     await saveStore(env, store);
-    return json({ success: true });
+    const ok = results.filter((r) => r.ok).length;
+    return json({ success: true, total: results.length, ok, fail: results.length - ok, results });
   }
 
   /* 只读数据快照：纯 JSON，无提示词、无加工字段，格式与导入接口对齐（取 .data 即可直接回灌）。
@@ -1338,75 +1357,6 @@ async function handle(path, method, url, request, env, ctx) {
   return json({ success: false, message: "接口不存在" }, 404);
 }
 
-/* ---------------- 定时任务：净值刷新 ----------------
-   只做一件事：遍历全部账户刷新净值，不做信号推送（推送由打开看板 GET /api/state 触发）。
-
-   2026-11-17 修复「定时任务不能把所有账户的净值都更新」：
-   1) 增量落盘——每处理完一个账户立刻 saveStore。旧实现只在全部账户跑完后保存一次，
-      Worker 调用一旦在中途被终止（CPU/墙钟上限、单只基金挂起），整轮结果全丢，
-      线上表现就是「净值一个都没变」或「只变了部分账户」。
-   2) 抓取加 8s 超时（见 FETCH_TIMEOUT_MS）——单只挂起不再拖垮整轮。
-   3) 轻量解析——只取净值曲线末尾（见 lastTrendPoint），把 CPU 预算留给更多基金。
-   4) 账户内并发 3 只（CRON_CONCURRENCY），缩短墙钟时间。
-   5) 每个账户的成败明细写入 cron:last，可直接看出是哪个账户没更新。 */
-async function refreshOneFund(fund) {
-  const fd = await fetchFundData(fund.code);
-  if (!fd || !fd.success) return { ok: false, message: (fd && fd.message) || "拉取失败" };
-  if (!(toFloat(fd.dwjz) > 0)) return { ok: false, message: "净值无效" };
-  fund.name = fd.name;
-  fund.currentPrice = fd.dwjz;
-  fund.jzrq = fd.jzrq;
-  return { ok: true };
-}
-async function runScheduledNetValueRefresh(env) {
-  const store = await loadStore(env);
-  const perAccount = [];
-  const errors = [];
-  let total = 0;
-  let ok = 0;
-  let fail = 0;
-  let saved = 0;
-
-  for (const acc of store.accounts || []) {
-    const name = (acc && acc.name) || "";
-    if (!name || !Array.isArray(store.fundsByAccount[name])) {
-      errors.push(`账户「${name || "未命名"}」缺少基金列表，已跳过`);
-      perAccount.push({ account: name || "(未命名)", total: 0, ok: 0, fail: 0, saved: false });
-      continue;
-    }
-    const funds = store.fundsByAccount[name];
-    let accOk = 0;
-    let accFail = 0;
-    for (let i = 0; i < funds.length; i += CRON_CONCURRENCY) {
-      const batch = funds.slice(i, i + CRON_CONCURRENCY);
-      const results = await Promise.all(batch.map((f) =>
-        refreshOneFund(f).catch((e) => ({ ok: false, message: e && e.message ? e.message : String(e) }))
-      ));
-      results.forEach((r, k) => {
-        total++;
-        if (r.ok) { ok++; accOk++; }
-        else { fail++; accFail++; errors.push(`${name}/${batch[k].code} ${r.message}`); }
-      });
-    }
-    let accSaved = false;
-    try {
-      await saveStore(env, store);
-      accSaved = true;
-      saved++;
-    } catch (e) {
-      errors.push(`账户「${name}」保存失败：${e && e.message ? e.message : String(e)}`);
-    }
-    perAccount.push({ account: name, total: funds.length, ok: accOk, fail: accFail, saved: accSaved });
-  }
-  /* 账户为空（或全部被跳过）时也要落一次，避免首次部署后 store 结构没被写回 */
-  if (!saved) {
-    try { await saveStore(env, store); } catch (e) {
-      errors.push(`保存失败：${e && e.message ? e.message : String(e)}`);
-    }
-  }
-  return { total, ok, fail, errors, perAccount, saved };
-}
-
 /* ---------------- 入口 ---------------- */
 export default {
   async fetch(request, env, ctx) {
@@ -1455,38 +1405,13 @@ export default {
         );
       }
     }
+    /* 精简运维页 /newdata：只保留「切换账户 + 刷新数据」。
+       实际文件是 public/newdata.html；这里做一次改写，否则 [assets] 的
+       single-page-application 回退会把它当成未知路径返回 index.html。 */
+    if (path === "/newdata" || path === "/newdata/") {
+      return env.ASSETS.fetch(new Request(new URL("/newdata.html", url.origin), request));
+    }
     // 静态前端（同源，无需 CORS）
     return env.ASSETS.fetch(request);
-  },
-
-  /* ---------------- 定时任务（Cron Trigger，见 wrangler.toml [triggers]） ----------------
-     每日 00:05（北京，即 UTC 16:05）自动刷新全部账户的基金净值，不做信号推送
-     （信号推送由打开看板 GET /api/state 时按需触发）。
-     设计要点：
-     - 官方未承诺 Cron 失败重试（runtime 有 controller.noRetry()，但重试策略无文档），
-       故按「失败即丢失、下个周期补」设计：逐只基金隔离错误，净值写入本身幂等，重跑无副作用；
-     - 每账户刷完即落盘（增量保存），中途被终止也不会丢掉已刷好的账户；
-     - 结果留痕到 KV "cron:last"（含每账户明细），配合 `wrangler tail` / Workers Logs 自查；
-     - 不主动抛出异常——抛出只会让本次运行被丢弃，异常已记录到日志与 KV。 */
-  async scheduled(controller, env, ctx) {
-    const cron = (controller && controller.cron) || "(未指定)";
-    const at = nowIso();
-    try {
-      const r = await runScheduledNetValueRefresh(env);
-      const tail = r.errors.length ? "：" + r.errors.join("；") : "";
-      console.log(`[cron ${cron}] 净值刷新 ${r.ok}/${r.total} 成功，${r.fail} 失败，落盘 ${r.saved} 次${tail}`);
-      try {
-        await env.STORE.put(CRON_LAST_KEY, JSON.stringify({
-          at, cron, outcome: "ok", total: r.total, ok: r.ok, fail: r.fail,
-          saved: r.saved, perAccount: r.perAccount, errors: r.errors.slice(0, 10),
-        }));
-      } catch { /* 留痕失败不影响主流程 */ }
-    } catch (e) {
-      const msg = e && e.message ? e.message : String(e);
-      console.error(`[cron ${cron}] 执行失败：${msg}`);
-      try {
-        await env.STORE.put(CRON_LAST_KEY, JSON.stringify({ at, cron, outcome: "error", error: msg }));
-      } catch { /* 留痕失败不影响主流程 */ }
-    }
-  },
+  }
 };
