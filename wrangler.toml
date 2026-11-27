@@ -29,6 +29,13 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
 
+# ⚠️ 这一行不能删。
+# 默认值 auto-trailing-slash 会把 /newdata.html 307 重定向到 /newdata，
+# 而 worker.js 又把 /newdata 改写成 /newdata.html → 互相甩锅成死循环，
+# 表现就是浏览器打开 /newdata.html 报 ERR_TOO_MANY_REDIRECTS（访问不了）。
+# 设成 none 后 .html 按字面路径直出，页面路由全部交给 worker.js 显式指派。
+html_handling = "none"
+
 # ===== 定时任务：已停用（2026-11-25 应用户要求删除每日自动刷新）=====
 # 注意：Cloudflare 的规则是「部署时用配置里的数组整体替换线上 cron」，
 # 但**不写 [triggers] 段会保留线上已有的 cron**，只删代码不删配置的话定时任务仍会触发。

@@ -87,6 +87,7 @@ bfzsdt/
 ### 前置条件
 
 - Node.js ≥ 18
+- Wrangler ≥ 4.x（`[assets] html_handling` 是较新的配置项，老版本会报未知字段；不确定就统一用 `npx wrangler@latest`）
 - Cloudflare 账号（免费套餐即可，KV 有每日免费额度，个人使用绰绰有余）
 
 ### 部署（约 5 分钟）
@@ -222,7 +223,7 @@ npx wrangler dev          # 本地起服务（默认 http://localhost:8787）
 
 ### 精简运维页 `/newdata`
 
-访问 `https://<域名>/newdata`（需登录，与主站共用会话）只有一个极简页面：
+访问 `https://<域名>/newdata`（需登录，与主站共用会话）只有一个极简页面。`/newdata`、`/newdata/`、`/newdata.html` 三个地址都指向同一页，记哪个都行：
 
 | 功能 | 说明 |
 |------|------|
@@ -240,7 +241,9 @@ npx wrangler dev          # 本地起服务（默认 http://localhost:8787）
 
 > 结果状态一直保留，不会自动消失；想再刷一次直接点按钮即可，切换账户会把按钮复位为「刷新数据」。
 
-> 页面本体是 `public/newdata.html`，由 Worker 在 `/newdata` 路由改写返回；未登录访问会落到登录页，不会暴露内容。
+> 页面本体是 `public/newdata.html`，由 Worker 在 `/newdata*` 路由显式指派；未登录访问会落到登录页，不会暴露内容。
+
+> ⚠️ **`wrangler.toml` 里的 `[assets] html_handling = "none"` 不能删。** 默认的 `auto-trailing-slash` 会把 `/newdata.html` 以 307 重定向到 `/newdata`，而 Worker 又把 `/newdata` 指回 `/newdata.html`，两者互为因果 → 浏览器报 `ERR_TOO_MANY_REDIRECTS`（就是「页面访问不了」）。关掉自动 HTML 处理后，`.html` 按字面路径直出，路由全部由 `worker.js` 显式决定。改动其中一处，必须同步另一处。
 
 ### 信号邮件推送
 

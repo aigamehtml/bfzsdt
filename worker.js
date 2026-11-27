@@ -1405,13 +1405,25 @@ export default {
         );
       }
     }
-    /* 精简运维页 /newdata：只保留「切换账户 + 刷新数据」。
-       实际文件是 public/newdata.html；这里做一次改写，否则 [assets] 的
-       single-page-application 回退会把它当成未知路径返回 index.html。 */
-    if (path === "/newdata" || path === "/newdata/") {
+    /* ===== 静态页面路由 =====
+       必须配合 wrangler.toml 里的 [assets] html_handling = "none"。
+       原因：Cloudflare 静态资源的默认规则 auto-trailing-slash 会把
+       /newdata.html 以 307 重定向到 /newdata；而下面又把 /newdata 改写成
+       /newdata.html，两者互为因果 → 无限重定向（浏览器报
+       ERR_TOO_MANY_REDIRECTS）。关掉自动 HTML 处理后，.html 按字面路径直出，
+       页面由这里显式指派，行为才可预测。改动其一务必同步另一个。 */
+
+    /* 精简运维页：只保留「切换账户 + 刷新数据」。
+       三个入口都收口到同一个文件，随便用户记哪个地址。 */
+    if (path === "/newdata" || path === "/newdata/" || path === "/newdata.html") {
       return env.ASSETS.fetch(new Request(new URL("/newdata.html", url.origin), request));
     }
-    // 静态前端（同源，无需 CORS）
+    /* 首页：显式取 index.html，不再依赖 html_handling 的隐式映射，
+       避免以后有人把配置改回去时首页跟着 307 循环。 */
+    if (path === "/" || path === "/index.html") {
+      return env.ASSETS.fetch(new Request(new URL("/index.html", url.origin), request));
+    }
+    // 其余静态资源（图标等）：同源直接转发
     return env.ASSETS.fetch(request);
   }
 };
